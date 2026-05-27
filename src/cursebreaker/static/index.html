@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CurseBreaker</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">CB</span>
+      <div>
+        <h1>CurseBreaker</h1>
+        <p class="tagline">Handwriting &rarr; searchable hOCR, powered by your Gemini key</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card" id="settings-card">
+      <div class="card-head">
+        <h2>Settings</h2>
+        <span id="key-status" class="badge">checking&hellip;</span>
+      </div>
+
+      <label class="field">
+        <span>Gemini API key</span>
+        <div class="row">
+          <input type="password" id="api_key" placeholder="Paste your key (stored locally on this machine)" autocomplete="off" />
+          <button id="save-key" class="btn small">Save key</button>
+        </div>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="use_mock" />
+        <span>Demo mode &mdash; try the full workflow without an API key (returns sample text)</span>
+      </label>
+
+      <fieldset class="field">
+        <legend>Transcription mode</legend>
+        <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
+        <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
+      </fieldset>
+
+      <div class="grid2">
+        <label class="field">
+          <span>Transcription model</span>
+          <input id="transcription_model" list="model-list" />
+        </label>
+        <label class="field">
+          <span>Detection model (two-pass)</span>
+          <input id="detection_model" list="model-list" />
+        </label>
+      </div>
+      <datalist id="model-list"></datalist>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="grid2">
+          <label class="field"><span>Temperature</span><input type="number" id="temperature" step="0.1" min="0" max="2" /></label>
+          <label class="field"><span>Thinking level</span>
+            <select id="thinking_level"><option>low</option><option>medium</option><option>high</option></select>
+          </label>
+          <label class="field"><span>Media resolution</span>
+            <select id="media_resolution"><option>high</option><option>medium</option><option>low</option></select>
+          </label>
+          <label class="field"><span>PDF DPI</span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
+          <label class="field"><span>Max image dimension (0 = original)</span><input type="number" id="max_dimension" step="256" min="0" /></label>
+          <label class="field"><span>Word confidence (hOCR)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
+        </div>
+        <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Documents</h2></div>
+      <div id="dropzone" class="dropzone">
+        <p><b>Drop image or PDF files here</b></p>
+        <p class="muted">TIFF, JPEG, PNG, GIF, PDF &mdash; bulk import supported</p>
+        <button class="btn" id="browse">Browse files</button>
+        <input type="file" id="file-input" multiple accept=".tif,.tiff,.jpg,.jpeg,.png,.gif,.pdf" hidden />
+      </div>
+      <ul id="staged" class="staged"></ul>
+      <div class="actions">
+        <button id="transcribe" class="btn primary" disabled>Transcribe</button>
+        <span id="action-note" class="muted"></span>
+      </div>
+    </section>
+
+    <section class="card" id="progress-card" hidden>
+      <div class="card-head"><h2>Progress</h2></div>
+      <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+      <p id="progress-text" class="muted"></p>
+    </section>
+
+    <section class="card" id="results-card" hidden>
+      <div class="card-head">
+        <h2>Results</h2>
+        <a id="zip-link" class="btn small" href="#">Download all (.zip)</a>
+      </div>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-inner">
+      <div class="modal-head">
+        <span id="modal-title"></span>
+        <button id="modal-close" class="btn small">Close</button>
+      </div>
+      <div class="modal-body"><img id="modal-img" alt="page preview with detected line boxes" /></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -61,6 +61,9 @@ class Settings(BaseModel):
 
 
 def config_path() -> Path:
+    override = os.environ.get("CURSEBREAKER_CONFIG")
+    if override:
+        return Path(override)
     return Path(user_config_dir(APP_NAME, appauthor=False)) / "settings.json"
 
 
