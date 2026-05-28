@@ -1,3 +1,5 @@
+from PIL import Image, UnidentifiedImageError
+
 from cursebreaker.images import is_supported, load_pages
 
 
@@ -22,6 +24,34 @@ def test_resize_scales_sent_image_only(png_path):
     page = pages[0]
     assert max(page.sent_width, page.sent_height) == 400
     assert (page.orig_width, page.orig_height) == (800, 600)
+
+
+def test_load_normal_tiff(tmp_path):
+    p = tmp_path / "scan.tif"
+    Image.new("RGB", (640, 480), "white").save(p)
+    pages = load_pages(p)
+    assert len(pages) == 1
+    assert (pages[0].orig_width, pages[0].orig_height) == (640, 480)
+
+
+def test_tiff_falls_back_to_fitz_when_pillow_cannot_decode(tmp_path, monkeypatch):
+    # Save a real TIFF that fitz can open; force the Pillow path to fail.
+    p = tmp_path / "tricky.tif"
+    Image.new("RGB", (400, 300), "white").save(p)
+
+    real_open = Image.open
+
+    def reject_tiff(path, *args, **kwargs):
+        if str(path).lower().endswith((".tif", ".tiff")):
+            raise UnidentifiedImageError("simulated Pillow decoder failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("cursebreaker.images.Image.open", reject_tiff)
+
+    pages = load_pages(p, pdf_dpi=72)  # zoom=1.0 in the fitz fallback
+    assert len(pages) == 1
+    # Falling back through fitz should still give us a usable page image.
+    assert pages[0].sent_width > 0 and pages[0].sent_height > 0
 
 
 def test_pdf_rasterizes_each_page(pdf_path):

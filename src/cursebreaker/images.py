@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
 
 RASTER_EXT = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".gif"}
 PDF_EXT = {".pdf"}
@@ -73,15 +73,36 @@ def _preprocess(img: Image.Image, *, enabled: bool, max_dimension: int) -> Image
     return img
 
 
-def _raster_frames(path: Path) -> list[Image.Image]:
+def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
     """Return every frame of a raster file (1 for normal images, N for
-    multi-frame TIFF/animated GIF)."""
+    multi-frame TIFF/animated GIF).
+
+    Tries Pillow first. Falls back to PyMuPDF (already a dependency) for
+    files Pillow can't decode -- most commonly TIFFs whose compression
+    isn't supported by Pillow's bundled libtiff (old fax/JBIG/JPEG-in-
+    TIFF variants and similar).
+    """
+    try:
+        frames: list[Image.Image] = []
+        with Image.open(path) as im:
+            n = getattr(im, "n_frames", 1)
+            for i in range(n):
+                im.seek(i)
+                frames.append(im.copy())
+        return frames
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
+        return _fitz_frames(path, zoom=dpi / 72.0)
+
+
+def _fitz_frames(path: Path, *, zoom: float) -> list[Image.Image]:
     frames: list[Image.Image] = []
-    with Image.open(path) as im:
-        n = getattr(im, "n_frames", 1)
-        for i in range(n):
-            im.seek(i)
-            frames.append(im.copy())
+    matrix = fitz.Matrix(zoom, zoom)
+    with fitz.open(path) as doc:
+        for page in doc:
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            frames.append(
+                Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            )
     return frames
 
 
@@ -102,7 +123,7 @@ def load_pages(
     if ext in PDF_EXT:
         raw_frames = _rasterize_pdf(path, dpi=pdf_dpi)
     else:
-        raw_frames = _raster_frames(path)
+        raw_frames = _raster_frames(path, dpi=pdf_dpi)
 
     multi = len(raw_frames) > 1
     for i, frame in enumerate(raw_frames):
@@ -125,12 +146,4 @@ def load_pages(
 
 
 def _rasterize_pdf(path: Path, *, dpi: int) -> list[Image.Image]:
-    frames: list[Image.Image] = []
-    zoom = dpi / 72.0
-    matrix = fitz.Matrix(zoom, zoom)
-    with fitz.open(path) as doc:
-        for page in doc:
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
-            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-            frames.append(img)
-    return frames
+    return _fitz_frames(path, zoom=dpi / 72.0)
