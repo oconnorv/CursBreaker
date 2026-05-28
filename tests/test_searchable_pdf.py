@@ -70,6 +70,39 @@ def test_pdf_multipage_matches_input(tmp_path):
             assert f"page" in doc[i].get_text()
 
 
+def test_unicode_text_round_trips(tmp_path):
+    img = _png(tmp_path, "u.png", size=(700, 240))
+    page = PageResult(
+        image_name="u.png",
+        width=700,
+        height=240,
+        lines=[
+            TranscribedLine(
+                text="Café naïveté résumé",
+                box=PixelBox(x0=10, y0=20, x1=600, y1=60),
+            ),
+            TranscribedLine(
+                text="Привет мир",
+                box=PixelBox(x0=10, y0=90, x1=500, y1=130),
+            ),
+            TranscribedLine(
+                text="Καλημέρα κόσμε",
+                box=PixelBox(x0=10, y0=160, x1=600, y1=200),
+            ),
+        ],
+        plain_text="Café naïveté résumé\nПривет мир\nΚαλημέρα κόσμε",
+    )
+    pdf_bytes = build_searchable_pdf([page], [img])
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        text = doc[0].get_text()
+    for word in (
+        "Café", "naïveté", "résumé",        # extended Latin
+        "Привет", "мир",                    # Cyrillic
+        "Καλημέρα", "κόσμε",                # Greek
+    ):
+        assert word in text, f"missing {word!r} in extracted text"
+
+
 def test_length_mismatch_raises(tmp_path):
     img = _png(tmp_path, "x.png")
     page = PageResult(

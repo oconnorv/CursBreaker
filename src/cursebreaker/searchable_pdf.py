@@ -19,6 +19,21 @@ import fitz
 from .hocr import split_line_into_words
 from .models import PageResult
 
+_FONT_NAME = "cb-uni"
+_FONT_PATH = Path(__file__).parent / "fonts" / "DejaVuSans.ttf"
+
+
+def _register_overlay_font(page) -> str:
+    """Make the bundled Unicode font available on this page, falling back to
+    PyMuPDF's built-in Helvetica if the file is somehow missing."""
+    if _FONT_PATH.is_file():
+        try:
+            page.insert_font(fontname=_FONT_NAME, fontfile=str(_FONT_PATH))
+            return _FONT_NAME
+        except Exception:
+            pass
+    return "helv"
+
 
 def build_searchable_pdf(
     pages: list[PageResult],
@@ -35,6 +50,7 @@ def build_searchable_pdf(
                 fitz.Rect(0, 0, page.width, page.height),
                 filename=str(image_path),
             )
+            font = _register_overlay_font(pdf_page)
             for line in page.lines:
                 # Place per-word invisible text at each word's bounding box, so
                 # cursor selection matches word boundaries and search hits land
@@ -52,7 +68,7 @@ def build_searchable_pdf(
                         (wbox.x0, wbox.y1),
                         word + " ",
                         fontsize=fontsize,
-                        fontname="helv",
+                        fontname=font,
                         render_mode=3,
                     )
         return doc.tobytes()
