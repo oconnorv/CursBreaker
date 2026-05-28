@@ -273,6 +273,16 @@ def _line_boxes_for_image(out_dir: Path, image_name: str) -> list[tuple[int, int
 # --------------------------------------------------------------------------- #
 # UI
 # --------------------------------------------------------------------------- #
+@app.get("/favicon.ico")
+def favicon():
+    # Drop a favicon.ico into src/cursebreaker/static/ to use a custom one;
+    # otherwise reply 204 so browsers stop asking and we don't log a 404.
+    f = STATIC_DIR / "favicon.ico"
+    if f.is_file():
+        return FileResponse(f, media_type="image/x-icon")
+    return Response(status_code=204)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (STATIC_DIR / "index.html").read_text("utf-8")

@@ -86,3 +86,9 @@ def test_process_requires_key_when_not_mock(png_path):
 def test_download_unknown_job_is_404():
     r = client.get("/api/download/does-not-exist/whatever.txt")
     assert r.status_code == 404
+
+
+def test_favicon_route_never_500s():
+    # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
+    r = client.get("/favicon.ico")
+    assert r.status_code in (200, 204)
