@@ -169,6 +169,7 @@ def _run_job(job_id, paths, settings, out_dir):
                 "n_lines": r.n_lines,
                 "txt": _url(job_id, r.txt_name),
                 "hocr": _url(job_id, r.hocr_name),
+                "pdf": _url(job_id, r.pdf_name),
                 "images": [
                     {"name": n, "download": _url(job_id, n), "preview": f"/api/preview/{job_id}/{n}"}
                     for n in r.image_names

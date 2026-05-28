@@ -30,6 +30,9 @@ def test_process_image_writes_outputs(png_path, tmp_path, mode):
     assert 'image "sample.png"' in root.xpath(
         "//x:div[@class='ocr_page']/@title", namespaces=NS
     )[0]
+    # A searchable PDF is written alongside the other outputs.
+    assert (out / "sample.pdf").exists()
+    assert result.pdf_name == "sample.pdf"
 
 
 def test_process_pdf_multipage(pdf_path, tmp_path):

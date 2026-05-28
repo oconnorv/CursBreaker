@@ -18,6 +18,7 @@ from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
 from .images import load_pages
 from .models import PageResult, TranscribedLine
+from .searchable_pdf import build_searchable_pdf
 
 ProgressCb = Callable[[int, int, str], None]
 
@@ -29,6 +30,7 @@ class FileResult:
     n_lines: int = 0
     txt_name: str | None = None
     hocr_name: str | None = None
+    pdf_name: str | None = None
     image_names: list[str] = field(default_factory=list)
     error: str | None = None
 
@@ -86,6 +88,7 @@ def process_file(
     stem = path.stem
     txt_name = f"{stem}.txt"
     hocr_name = f"{stem}.hocr"
+    pdf_name = f"{stem}.pdf"
 
     txt = "\n\n".join(p.plain_text.strip() for p in page_results)
     (out_dir / txt_name).write_text(txt, "utf-8")
@@ -97,12 +100,18 @@ def process_file(
     )
     (out_dir / hocr_name).write_bytes(hocr_bytes)
 
+    pdf_bytes = build_searchable_pdf(
+        page_results, [out_dir / n for n in image_names]
+    )
+    (out_dir / pdf_name).write_bytes(pdf_bytes)
+
     return FileResult(
         source_name=path.name,
         n_pages=len(page_results),
         n_lines=sum(len(p.lines) for p in page_results),
         txt_name=txt_name,
         hocr_name=hocr_name,
+        pdf_name=pdf_name,
         image_names=image_names,
     )
 

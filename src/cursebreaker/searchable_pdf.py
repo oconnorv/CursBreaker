@@ -1,0 +1,60 @@
+"""Build a searchable PDF: page image + invisible OCR text overlay.
+
+Each PDF page shows the rendered page image and carries an *invisible*
+text layer placed at the bounding-box positions. Users see the original
+handwriting, and any PDF viewer can select/search the transcribed text
+on top of it.
+
+The text uses PyMuPDF's ``render_mode=3``, which writes the characters
+into the PDF content stream without filling or stroking them: invisible
+on screen, but harvested by every PDF text extractor and search index.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import fitz
+
+from .hocr import split_line_into_words
+from .models import PageResult
+
+
+def build_searchable_pdf(
+    pages: list[PageResult],
+    image_paths: list[Path],
+) -> bytes:
+    if len(pages) != len(image_paths):
+        raise ValueError("pages and image_paths must have the same length")
+
+    doc = fitz.open()
+    try:
+        for page, image_path in zip(pages, image_paths):
+            pdf_page = doc.new_page(width=page.width, height=page.height)
+            pdf_page.insert_image(
+                fitz.Rect(0, 0, page.width, page.height),
+                filename=str(image_path),
+            )
+            for line in page.lines:
+                # Place per-word invisible text at each word's bounding box, so
+                # cursor selection matches word boundaries and search hits land
+                # on the right region of the page.
+                for word, wbox in split_line_into_words(line.text, line.box):
+                    if wbox.x1 <= wbox.x0 or wbox.y1 <= wbox.y0:
+                        continue
+                    fontsize = max(1.0, (wbox.y1 - wbox.y0) * 0.7)
+                    # PyMuPDF's high-level API uses a top-left origin, so the
+                    # baseline sits at the box's bottom edge.
+                    # Trailing space helps the PDF text extractor see a word
+                    # break between tightly packed word boxes (otherwise "the
+                    # cat" can extract as "thecat").
+                    pdf_page.insert_text(
+                        (wbox.x0, wbox.y1),
+                        word + " ",
+                        fontsize=fontsize,
+                        fontname="helv",
+                        render_mode=3,
+                    )
+        return doc.tobytes()
+    finally:
+        doc.close()

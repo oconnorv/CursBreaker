@@ -57,6 +57,12 @@ def test_full_flow_with_mock(png_path):
     assert preview.status_code == 200
     assert preview.headers["content-type"] == "image/png"
 
+    # Searchable PDF download
+    assert result["pdf"], "searchable PDF URL missing from job result"
+    pdf = client.get(result["pdf"])
+    assert pdf.status_code == 200
+    assert pdf.content[:4] == b"%PDF"
+
     zipped = client.get(f"/api/download/{started['job_id']}.zip")
     assert zipped.status_code == 200
     assert zipped.content[:2] == b"PK"

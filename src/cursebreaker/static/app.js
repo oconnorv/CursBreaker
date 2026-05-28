@@ -158,7 +158,9 @@ function renderResults(jobId, job) {
       html += `<p class="err">Error: ${escapeHtml(r.error)}</p>`;
       div.innerHTML = html;
     } else {
+      const pdfLink = r.pdf ? `<a class="btn small primary" href="${r.pdf}">Searchable PDF</a>` : "";
       html += `<div class="links">
+        ${pdfLink}
         <a class="btn small" href="${r.txt}">Download .txt</a>
         <a class="btn small" href="${r.hocr}">Download .hocr</a></div>`;
       div.innerHTML = html;
