@@ -66,6 +66,14 @@ async def update_settings(payload: dict):
     return settings.public_dict()
 
 
+@app.delete("/api/settings/api_key")
+def clear_api_key():
+    settings = load_settings()
+    settings.api_key = ""
+    save_settings(settings)
+    return settings.public_dict()
+
+
 @app.get("/api/models")
 def list_models():
     settings = load_settings()

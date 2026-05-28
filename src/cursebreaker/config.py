@@ -49,7 +49,18 @@ class Settings(BaseModel):
         """Settings safe to send to the browser (API key presence only)."""
         data = self.model_dump()
         data.pop("api_key", None)
-        data["api_key_set"] = bool(self.resolved_api_key())
+        resolved = self.resolved_api_key()
+        data["api_key_set"] = bool(resolved)
+        data["api_key_hint"] = (
+            f"••••{resolved[-4:]}" if len(resolved) >= 4
+            else ("••••" if resolved else "")
+        )
+        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+            data["api_key_source"] = "env"
+        elif self.api_key:
+            data["api_key_source"] = "config"
+        else:
+            data["api_key_source"] = None
         return data
 
     def resolved_api_key(self) -> str:

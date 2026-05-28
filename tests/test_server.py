@@ -21,10 +21,38 @@ def test_settings_hides_key_and_roundtrips():
     r = client.get("/api/settings").json()
     assert r["api_key_set"] is False
     assert "api_key" not in r
+    assert r["api_key_hint"] == ""
+    assert r["api_key_source"] is None
 
     r2 = client.post("/api/settings", json={"use_mock": True, "mode": "one_pass"}).json()
     assert r2["use_mock"] is True
     assert r2["mode"] == "one_pass"
+
+
+def test_settings_exposes_key_hint_without_revealing_value():
+    # Save a key
+    r = client.post("/api/settings", json={"api_key": "AIzaSyABCDEFGHIJ_pretend_key_XYZ34"}).json()
+    assert r["api_key_set"] is True
+    assert "api_key" not in r          # raw key never leaves the server
+    assert r["api_key_hint"].startswith("••••")
+    assert r["api_key_hint"].endswith("XYZ34"[-4:])   # last 4 of the stored key
+    assert r["api_key_source"] == "config"
+
+
+def test_clear_api_key_endpoint():
+    client.post("/api/settings", json={"api_key": "AIzaSy_keytoremove_ABCD"})
+    assert client.get("/api/settings").json()["api_key_set"] is True
+    r = client.delete("/api/settings/api_key").json()
+    assert r["api_key_set"] is False
+    assert r["api_key_hint"] == ""
+
+
+def test_env_var_overrides_and_is_reported_as_source(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "env-set-key-ENDS")
+    r = client.get("/api/settings").json()
+    assert r["api_key_set"] is True
+    assert r["api_key_source"] == "env"
+    assert r["api_key_hint"].endswith("ENDS")
 
 
 def test_full_flow_with_mock(png_path):

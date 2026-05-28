@@ -39,9 +39,20 @@ function gatherSettings() {
 
 function applyKeyStatus(data) {
   const badge = $("key-status");
-  if (data.use_mock) { badge.textContent = "Demo mode"; badge.className = "badge ok"; }
-  else if (data.api_key_set) { badge.textContent = "Key saved"; badge.className = "badge ok"; }
-  else { badge.textContent = "No API key"; badge.className = "badge warn"; }
+  const info = $("key-info");
+  if (data.use_mock) {
+    badge.textContent = "Demo mode"; badge.className = "badge ok";
+    info.textContent = "Demo mode is on — no real API call will be made.";
+  } else if (data.api_key_set) {
+    badge.textContent = "Key saved"; badge.className = "badge ok";
+    const where = data.api_key_source === "env"
+      ? "from the GEMINI_API_KEY environment variable"
+      : "stored locally on this machine";
+    info.textContent = `Gemini key ${where}: ${data.api_key_hint}`;
+  } else {
+    badge.textContent = "No API key"; badge.className = "badge warn";
+    info.textContent = "No Gemini key stored. Paste one above or set GEMINI_API_KEY.";
+  }
 }
 
 async function loadSettings() {
@@ -198,6 +209,12 @@ function escapeHtml(s) {
 
 function wire() {
   $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => { $("api_key").value = ""; });
+  $("clear-key").onclick = async () => {
+    if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;
+    await api("DELETE", "/api/settings/api_key");
+    $("api_key").value = "";
+    await loadSettings();
+  };
   for (const id of [...TEXT, ...NUMERIC]) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const id of BOOL) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const r of document.querySelectorAll("input[name=mode]")) r.addEventListener("change", () => saveSettings(gatherSettings()));
