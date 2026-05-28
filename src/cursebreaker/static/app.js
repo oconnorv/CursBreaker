@@ -40,18 +40,25 @@ function gatherSettings() {
 function applyKeyStatus(data) {
   const badge = $("key-status");
   const info = $("key-info");
+  info.hidden = false;
   if (data.use_mock) {
     badge.textContent = "Demo mode"; badge.className = "badge ok";
-    info.textContent = "Demo mode is on — no real API call will be made.";
+    info.className = "key-info";
+    info.innerHTML =
+      `<span class="glyph">●</span><span>Demo mode is on — no real API call will be made.</span>`;
   } else if (data.api_key_set) {
     badge.textContent = "Key saved"; badge.className = "badge ok";
+    info.className = "key-info";
     const where = data.api_key_source === "env"
-      ? "from the GEMINI_API_KEY environment variable"
+      ? `from <span class="mono">GEMINI_API_KEY</span> environment variable`
       : "stored locally on this machine";
-    info.textContent = `Gemini key ${where}: ${data.api_key_hint}`;
+    info.innerHTML =
+      `<span class="glyph">✓</span><span>Gemini key ${where}: <span class="mono">${escapeHtml(data.api_key_hint || "")}</span></span>`;
   } else {
     badge.textContent = "No API key"; badge.className = "badge warn";
-    info.textContent = "No Gemini key stored. Paste one above or set GEMINI_API_KEY.";
+    info.className = "key-info warn";
+    info.innerHTML =
+      `<span class="glyph">!</span><span>No Gemini key stored. Paste one above or set <span class="mono">GEMINI_API_KEY</span>.</span>`;
   }
 }
 
