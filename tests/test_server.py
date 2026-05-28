@@ -126,3 +126,36 @@ def test_favicon_route_never_500s():
     # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
     r = client.get("/favicon.ico")
     assert r.status_code in (200, 204)
+
+
+def test_heartbeat_endpoint_updates_timestamp():
+    from cursebreaker import server
+    server._LAST_PING_AT = None
+    r = client.post("/api/heartbeat")
+    assert r.status_code == 200
+    assert server._LAST_PING_AT is not None
+
+
+def test_heartbeat_bye_pulls_timestamp_back():
+    from cursebreaker import server
+    import time
+
+    server._LAST_PING_AT = None
+    before = time.time()
+    client.post("/api/heartbeat?bye=true")
+    # The bye signal moves the last-seen time into the past so the watchdog
+    # fires soon, while still leaving a few seconds for a refresh.
+    assert server._LAST_PING_AT is not None
+    assert server._LAST_PING_AT < before + 0.5
+
+
+def test_should_shutdown_predicate():
+    from cursebreaker.server import _should_shutdown
+    # No ping yet -> never shut down
+    assert _should_shutdown(None, 10, now=100) is False
+    # Recent ping -> stay up
+    assert _should_shutdown(95, 10, now=100) is False
+    # Stale ping -> shut down
+    assert _should_shutdown(50, 10, now=100) is True
+    # Job in flight pins the server alive even past the grace period
+    assert _should_shutdown(50, 10, now=100, jobs_running=True) is False

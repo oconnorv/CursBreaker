@@ -241,6 +241,18 @@ function wire() {
   $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closePreview(); });
 }
 
+// ---- heartbeat: server shuts itself down when the tab stops pinging ---- //
+function heartbeat() {
+  fetch("/api/heartbeat", { method: "POST", keepalive: true }).catch(() => {});
+}
+heartbeat();
+setInterval(heartbeat, 5000);
+function bye() {
+  try { navigator.sendBeacon("/api/heartbeat?bye=true"); } catch (e) {}
+}
+window.addEventListener("beforeunload", bye);
+window.addEventListener("pagehide", (e) => { if (!e.persisted) bye(); });
+
 wire();
 loadSettings();
 loadModels();

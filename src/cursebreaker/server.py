@@ -9,8 +9,11 @@ The user's original files are never modified.
 from __future__ import annotations
 
 import io
+import os
+import signal
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -42,6 +45,11 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 STAGED: dict[str, Path] = {}
 JOBS: dict[str, dict] = {}
+
+# Browser heartbeat / auto-shutdown state. Tests don't start the watchdog; it is
+# kicked off explicitly from __main__ when the CLI launches the server.
+_LAST_PING_AT: float | None = None
+_AUTOSHUTDOWN_STARTED = False
 
 
 # --------------------------------------------------------------------------- #
@@ -277,6 +285,78 @@ def _line_boxes_for_image(out_dir: Path, image_name: str) -> list[tuple[int, int
                         boxes.append((x0, y0, x1, y1))
             return boxes
     return []
+
+
+# --------------------------------------------------------------------------- #
+# Browser heartbeat / auto-shutdown
+# --------------------------------------------------------------------------- #
+@app.post("/api/heartbeat")
+def heartbeat(bye: bool = False):
+    """The page pings every few seconds while it's open. ``bye=true`` is sent
+    via ``navigator.sendBeacon`` on tab close, which pulls the last-seen time
+    back so the watchdog fires shortly (unless another tab is still pinging)."""
+    global _LAST_PING_AT
+    now = time.time()
+    if bye:
+        _LAST_PING_AT = now - max(0.0, _SHUTDOWN_GRACE - 3.0)
+    else:
+        _LAST_PING_AT = now
+    return {"ok": True}
+
+
+_SHUTDOWN_GRACE = 15.0  # seconds without a ping before we quit
+_SHUTDOWN_POLL = 2.0  # how often the watchdog checks
+
+
+def _any_jobs_running() -> bool:
+    return any(j.get("status") == "running" for j in JOBS.values())
+
+
+def _should_shutdown(
+    last_ping: float | None,
+    grace: float,
+    *,
+    now: float | None = None,
+    jobs_running: bool = False,
+) -> bool:
+    if jobs_running or last_ping is None:
+        return False
+    return ((time.time() if now is None else now) - last_ping) > grace
+
+
+def _quit_process() -> None:
+    """Polite shutdown first (uvicorn handles SIGINT gracefully); hard-exit as
+    a backstop if uvicorn doesn't pick it up promptly."""
+    try:
+        signal.raise_signal(signal.SIGINT)
+    except Exception:
+        pass
+    threading.Timer(2.5, lambda: os._exit(0)).start()
+
+
+def start_autoshutdown(
+    grace_seconds: float = _SHUTDOWN_GRACE, poll_seconds: float = _SHUTDOWN_POLL
+) -> None:
+    """Begin the watchdog thread. Safe to call multiple times (no-op after the
+    first call)."""
+    global _LAST_PING_AT, _AUTOSHUTDOWN_STARTED, _SHUTDOWN_GRACE, _SHUTDOWN_POLL
+    if _AUTOSHUTDOWN_STARTED:
+        return
+    _AUTOSHUTDOWN_STARTED = True
+    _SHUTDOWN_GRACE = grace_seconds
+    _SHUTDOWN_POLL = poll_seconds
+    _LAST_PING_AT = time.time()  # initial grace until the first browser ping
+
+    def loop():
+        while True:
+            time.sleep(poll_seconds)
+            if _should_shutdown(
+                _LAST_PING_AT, grace_seconds, jobs_running=_any_jobs_running()
+            ):
+                _quit_process()
+                return
+
+    threading.Thread(target=loop, name="cb-autoshutdown", daemon=True).start()
 
 
 # --------------------------------------------------------------------------- #
