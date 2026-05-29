@@ -1,6 +1,18 @@
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, TiffImagePlugin, UnidentifiedImageError
 
-from cursebreaker.images import is_supported, load_pages
+from cursebreaker.images import count_content_pages, is_supported, load_pages
+
+
+def _tiff_with_thumbnail(path):
+    """A two-frame TIFF: a 'real' page plus a thumbnail flagged via the
+    NewSubfileType tag (bit 0 = reduced-resolution version of another image)."""
+    main = Image.new("RGB", (800, 600), "white")
+    thumb = Image.new("RGB", (100, 75), "gray")
+    ifd = TiffImagePlugin.ImageFileDirectory_v2()
+    ifd[254] = 1
+    thumb.encoderinfo = {"tiffinfo": ifd}
+    main.save(path, format="TIFF", save_all=True, append_images=[thumb])
+    return path
 
 
 def test_supported_extensions():
@@ -52,6 +64,22 @@ def test_tiff_falls_back_to_fitz_when_pillow_cannot_decode(tmp_path, monkeypatch
     assert len(pages) == 1
     # Falling back through fitz should still give us a usable page image.
     assert pages[0].sent_width > 0 and pages[0].sent_height > 0
+
+
+def test_count_content_pages_skips_tiff_thumbnail(tmp_path):
+    p = _tiff_with_thumbnail(tmp_path / "scan_with_thumb.tif")
+    # Pillow reports 2 frames; only one is real content.
+    with Image.open(p) as im:
+        assert getattr(im, "n_frames", 1) == 2
+    assert count_content_pages(p) == 1
+
+
+def test_load_pages_skips_tiff_thumbnail_frame(tmp_path):
+    p = _tiff_with_thumbnail(tmp_path / "scan.tif")
+    pages = load_pages(p)
+    assert len(pages) == 1
+    # The content frame is the larger one (800x600), not the 100x75 thumbnail.
+    assert (pages[0].orig_width, pages[0].orig_height) == (800, 600)
 
 
 def test_pdf_rasterizes_each_page(pdf_path):

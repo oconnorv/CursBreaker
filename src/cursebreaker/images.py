@@ -56,6 +56,46 @@ def is_supported(path: str | Path) -> bool:
     return Path(path).suffix.lower() in SUPPORTED_EXT
 
 
+def _is_thumbnail_frame(im: Image.Image) -> bool:
+    """Return True for a TIFF frame flagged as a reduced-resolution thumbnail
+    or transparency mask via the ``NewSubfileType`` tag (254).
+
+    Many scanners embed a thumbnail as a second internal frame, which Pillow's
+    ``n_frames`` would otherwise count as a page.
+    """
+    try:
+        nst = im.tag_v2.get(254, 0)
+    except (AttributeError, KeyError, TypeError):
+        return False
+    # Bit 0 (= 1): reduced-resolution version of another image (thumbnail).
+    # Bit 2 (= 4): transparency mask for another image in this file.
+    return bool(nst & 0b101)
+
+
+def count_content_pages(path: str | Path) -> int:
+    """Return the number of *content* pages, skipping embedded thumbnails."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    try:
+        if ext in PDF_EXT:
+            with fitz.open(path) as doc:
+                return doc.page_count
+        with Image.open(path) as im:
+            n = getattr(im, "n_frames", 1)
+            if n <= 1:
+                return n
+            keep = 0
+            for i in range(n):
+                im.seek(i)
+                if not _is_thumbnail_frame(im):
+                    keep += 1
+            # If every frame is somehow flagged, fall back to the raw count
+            # rather than reporting zero pages.
+            return keep or n
+    except Exception:
+        return 1
+
+
 def _preprocess(img: Image.Image, *, enabled: bool, max_dimension: int) -> Image.Image:
     """Conservative preprocessing. Aggressive filters can hurt handwriting, so
     we only normalize orientation/color and apply gentle enhancement."""
@@ -74,8 +114,9 @@ def _preprocess(img: Image.Image, *, enabled: bool, max_dimension: int) -> Image
 
 
 def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
-    """Return every frame of a raster file (1 for normal images, N for
-    multi-frame TIFF/animated GIF).
+    """Return every content frame of a raster file (1 for normal images, N for
+    multi-frame TIFF/animated GIF). Embedded thumbnails / reduced-resolution
+    preview frames (TIFF ``NewSubfileType`` flag) are skipped.
 
     Tries Pillow first. Falls back to PyMuPDF (already a dependency) for
     files Pillow can't decode -- most commonly TIFFs whose compression
@@ -88,7 +129,15 @@ def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
             n = getattr(im, "n_frames", 1)
             for i in range(n):
                 im.seek(i)
+                if n > 1 and _is_thumbnail_frame(im):
+                    continue
                 frames.append(im.copy())
+        if not frames:
+            # Every frame was flagged; keep the first so we never return
+            # nothing for an otherwise readable file.
+            with Image.open(path) as im:
+                im.seek(0)
+                frames = [im.copy()]
         return frames
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
         return _fitz_frames(path, zoom=dpi / 72.0)

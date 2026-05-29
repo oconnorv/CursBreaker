@@ -29,7 +29,7 @@ from . import __version__
 from .config import load_settings, save_settings
 from .gemini_client import SUGGESTED_MODELS, make_provider
 from .hocr import XHTML_NS
-from .images import SUPPORTED_EXT, is_supported
+from .images import SUPPORTED_EXT, count_content_pages, is_supported
 from .pipeline import process_batch
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -98,16 +98,7 @@ def list_models():
 # Upload / process / status
 # --------------------------------------------------------------------------- #
 def _page_count(path: Path) -> int:
-    try:
-        if path.suffix.lower() == ".pdf":
-            import fitz
-
-            with fitz.open(path) as doc:
-                return doc.page_count
-        with Image.open(path) as im:
-            return getattr(im, "n_frames", 1)
-    except Exception:
-        return 1
+    return count_content_pages(path)
 
 
 @app.post("/api/upload")
