@@ -159,3 +159,49 @@ def test_should_shutdown_predicate():
     assert _should_shutdown(50, 10, now=100) is True
     # Job in flight pins the server alive even past the grace period
     assert _should_shutdown(50, 10, now=100, jobs_running=True) is False
+
+
+def test_access_log_filter_drops_heartbeat_keeps_others():
+    import logging
+
+    from cursebreaker.server import install_access_log_filter
+
+    install_access_log_filter()
+    logger = logging.getLogger("uvicorn.access")
+    our = next(
+        f for f in logger.filters
+        if getattr(f, "_cursebreaker_heartbeat", False)
+    )
+
+    fmt = '%s - "%s %s HTTP/%s" %d'
+    hb = logger.makeRecord(
+        "uvicorn.access", logging.INFO, "", 0, fmt,
+        ("127.0.0.1:12345", "POST", "/api/heartbeat", "1.1", 200),
+        None,
+    )
+    hb_bye = logger.makeRecord(
+        "uvicorn.access", logging.INFO, "", 0, fmt,
+        ("127.0.0.1:12345", "POST", "/api/heartbeat?bye=true", "1.1", 200),
+        None,
+    )
+    upload = logger.makeRecord(
+        "uvicorn.access", logging.INFO, "", 0, fmt,
+        ("127.0.0.1:12345", "POST", "/api/upload", "1.1", 200),
+        None,
+    )
+
+    assert our.filter(hb) is False
+    assert our.filter(hb_bye) is False
+    assert our.filter(upload) is True
+
+    # Idempotent: calling twice doesn't stack duplicate filters.
+    before = sum(
+        1 for f in logger.filters
+        if getattr(f, "_cursebreaker_heartbeat", False)
+    )
+    install_access_log_filter()
+    after = sum(
+        1 for f in logger.filters
+        if getattr(f, "_cursebreaker_heartbeat", False)
+    )
+    assert before == after == 1

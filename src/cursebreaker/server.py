@@ -359,6 +359,30 @@ def start_autoshutdown(
     threading.Thread(target=loop, name="cb-autoshutdown", daemon=True).start()
 
 
+def install_access_log_filter() -> None:
+    """Drop heartbeat hits from uvicorn's access log so the CLI stays quiet
+    while the browser is just keeping the server alive."""
+    import logging
+
+    class _HideHeartbeat(logging.Filter):
+        _cursebreaker_heartbeat = True
+
+        def filter(self, record):  # noqa: A003 (logging API name)
+            try:
+                for arg in (record.args or ()):
+                    if isinstance(arg, str) and "/api/heartbeat" in arg:
+                        return False
+                if "/api/heartbeat" in record.getMessage():
+                    return False
+            except Exception:
+                pass
+            return True
+
+    logger = logging.getLogger("uvicorn.access")
+    if not any(getattr(f, "_cursebreaker_heartbeat", False) for f in logger.filters):
+        logger.addFilter(_HideHeartbeat())
+
+
 # --------------------------------------------------------------------------- #
 # UI
 # --------------------------------------------------------------------------- #

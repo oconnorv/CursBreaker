@@ -21,7 +21,7 @@ def main() -> None:
 
     import uvicorn
 
-    from .server import start_autoshutdown
+    from .server import install_access_log_filter, start_autoshutdown
 
     url = f"http://{args.host}:{args.port}/"
     if not args.no_browser:
@@ -29,6 +29,8 @@ def main() -> None:
 
     if not args.keep_alive:
         start_autoshutdown()
+
+    install_access_log_filter()
 
     print(f"CurseBreaker running at {url}  (Ctrl+C to stop)")
     uvicorn.run("cursebreaker.server:app", host=args.host, port=args.port, log_level="info")
