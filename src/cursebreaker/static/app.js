@@ -127,6 +127,10 @@ function renderStaged() {
 // ---- processing --------------------------------------------------------- //
 async function transcribe() {
   if (!staged.length) return;
+  // Free up screen space the moment work starts so progress + results land
+  // above the fold on smaller laptops.
+  const sd = $("settings-details");
+  if (sd) sd.open = false;
   $("transcribe").disabled = true;
   $("results-card").hidden = true;
   $("results").innerHTML = "";
@@ -252,6 +256,20 @@ function bye() {
 }
 window.addEventListener("beforeunload", bye);
 window.addEventListener("pagehide", (e) => { if (!e.persisted) bye(); });
+
+// Restore the user's last Settings open/closed choice, and remember changes.
+(function restoreSettingsPanel() {
+  const sd = $("settings-details");
+  if (!sd) return;
+  try {
+    const saved = localStorage.getItem("cb.settings.open");
+    if (saved === "0") sd.open = false;
+    else if (saved === "1") sd.open = true;
+  } catch (e) {}
+  sd.addEventListener("toggle", () => {
+    try { localStorage.setItem("cb.settings.open", sd.open ? "1" : "0"); } catch (e) {}
+  });
+})();
 
 wire();
 loadSettings();

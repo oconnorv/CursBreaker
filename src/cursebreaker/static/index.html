@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CurseBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=3" />
+  <link rel="stylesheet" href="/static/styles.css?v=4" />
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
 </head>
 <body>
@@ -20,59 +20,64 @@
 
   <main>
     <section class="card" id="settings-card">
-      <div class="card-head">
-        <h2>Settings</h2>
-        <span id="key-status" class="badge">checking&hellip;</span>
-      </div>
+      <details id="settings-details" open>
+        <summary class="card-head settings-summary">
+          <span class="chev" aria-hidden="true"></span>
+          <h2>Settings</h2>
+          <span id="key-status" class="badge">checking&hellip;</span>
+        </summary>
 
-      <div class="field">
-        <label for="api_key"><span>Gemini API key</span></label>
-        <div class="row">
-          <input type="password" id="api_key" placeholder="Paste your key (stored locally on this machine)" autocomplete="off" />
-          <button id="save-key" class="btn small" type="button">Save key</button>
-          <button id="clear-key" class="btn small" type="button">Clear</button>
-        </div>
-        <div id="key-info" class="key-info" hidden></div>
-      </div>
+        <div class="settings-body">
+          <div class="field">
+            <label for="api_key"><span>Gemini API key</span></label>
+            <div class="row">
+              <input type="password" id="api_key" placeholder="Paste your key (stored locally on this machine)" autocomplete="off" />
+              <button id="save-key" class="btn small" type="button">Save key</button>
+              <button id="clear-key" class="btn small" type="button">Clear</button>
+            </div>
+            <div id="key-info" class="key-info" hidden></div>
+          </div>
 
-      <label class="check">
-        <input type="checkbox" id="use_mock" />
-        <span>Demo mode &mdash; try the full workflow without an API key (returns sample text)</span>
-      </label>
-
-      <fieldset class="field">
-        <legend>Transcription mode</legend>
-        <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
-        <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
-      </fieldset>
-
-      <div class="grid2">
-        <label class="field">
-          <span>Transcription model</span>
-          <input id="transcription_model" list="model-list" />
-        </label>
-        <label class="field">
-          <span>Detection model (two-pass)</span>
-          <input id="detection_model" list="model-list" />
-        </label>
-      </div>
-      <datalist id="model-list"></datalist>
-
-      <details class="advanced">
-        <summary>Advanced</summary>
-        <div class="grid2">
-          <label class="field"><span>Temperature</span><input type="number" id="temperature" step="0.1" min="0" max="2" /></label>
-          <label class="field"><span>Thinking level</span>
-            <select id="thinking_level"><option>low</option><option>medium</option><option>high</option></select>
+          <label class="check">
+            <input type="checkbox" id="use_mock" />
+            <span>Demo mode &mdash; try the full workflow without an API key (returns sample text)</span>
           </label>
-          <label class="field"><span>Media resolution</span>
-            <select id="media_resolution"><option>high</option><option>medium</option><option>low</option></select>
-          </label>
-          <label class="field"><span>PDF DPI</span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
-          <label class="field"><span>Max image dimension (0 = original)</span><input type="number" id="max_dimension" step="256" min="0" /></label>
-          <label class="field"><span>Word confidence (hOCR)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
+
+          <fieldset class="field">
+            <legend>Transcription mode</legend>
+            <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
+            <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
+          </fieldset>
+
+          <div class="grid2">
+            <label class="field">
+              <span>Transcription model</span>
+              <input id="transcription_model" list="model-list" />
+            </label>
+            <label class="field">
+              <span>Detection model (two-pass)</span>
+              <input id="detection_model" list="model-list" />
+            </label>
+          </div>
+          <datalist id="model-list"></datalist>
+
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <div class="grid2">
+              <label class="field"><span>Temperature</span><input type="number" id="temperature" step="0.1" min="0" max="2" /></label>
+              <label class="field"><span>Thinking level</span>
+                <select id="thinking_level"><option>low</option><option>medium</option><option>high</option></select>
+              </label>
+              <label class="field"><span>Media resolution</span>
+                <select id="media_resolution"><option>high</option><option>medium</option><option>low</option></select>
+              </label>
+              <label class="field"><span>PDF DPI</span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
+              <label class="field"><span>Max image dimension (0 = original)</span><input type="number" id="max_dimension" step="256" min="0" /></label>
+              <label class="field"><span>Word confidence (hOCR)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
+            </div>
+            <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
+          </details>
         </div>
-        <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
       </details>
     </section>
 
@@ -116,6 +121,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

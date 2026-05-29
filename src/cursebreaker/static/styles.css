@@ -44,7 +44,29 @@ main {
   box-shadow: 0 10px 30px rgba(0,0,0,.25);
 }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.card-head h2 { margin: 0; font-size: 16px; }
+.card-head h2 { margin: 0; font-size: 16px; flex: 1; }
+
+/* Collapsible Settings card (native <details>) */
+#settings-details > summary { list-style: none; cursor: pointer; }
+#settings-details > summary::-webkit-details-marker { display: none; }
+#settings-details[open] > summary { margin-bottom: 14px; }
+#settings-details:not([open]) > summary { margin-bottom: 0; }
+.settings-summary .chev {
+  display: inline-block; width: 0; height: 0;
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--muted);
+  margin-right: 10px; transition: transform 0.15s;
+}
+#settings-details[open] .settings-summary .chev { transform: rotate(90deg); }
+#settings-details > summary:hover .chev { border-left-color: var(--text); }
+
+/* Narrow viewports: drop two-column fields to one and tighten padding */
+@media (max-width: 640px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .card { padding: 14px; }
+  main { padding: 6px 12px 40px; }
+  .topbar { padding: 14px 16px; }
+}
 
 .field { display: block; margin: 12px 0; }
 .field > span, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
