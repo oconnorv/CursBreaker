@@ -99,10 +99,13 @@ def _sub(parent, tag: str, **attrib) -> etree._Element:
 
 
 def build_hocr(
-    pages: list[PageResult], *, ocr_system: str = "CurseBreaker", confidence: int = 95
+    pages: list[PageResult],
+    *,
+    ocr_system: str = "CurseBreaker",
+    language: str = "en",
 ) -> bytes:
     html = etree.Element(_q("html"), nsmap={None: XHTML_NS})
-    html.set(f"{{{XML_NS}}}lang", "en")
+    html.set(f"{{{XML_NS}}}lang", language)
 
     head = _sub(html, "head")
     title = _sub(head, "title")
@@ -113,7 +116,7 @@ def build_hocr(
 
     body = _sub(html, "body")
     for pi, page in enumerate(pages, start=1):
-        _build_page(body, page, pi, confidence)
+        _build_page(body, page, pi, language=language)
 
     return etree.tostring(
         etree.ElementTree(html),
@@ -124,7 +127,7 @@ def build_hocr(
     )
 
 
-def _build_page(body, page: PageResult, pi: int, confidence: int) -> None:
+def _build_page(body, page: PageResult, pi: int, *, language: str) -> None:
     page_div = _sub(
         body,
         "div",
@@ -143,16 +146,24 @@ def _build_page(body, page: PageResult, pi: int, confidence: int) -> None:
     par = _sub(
         carea,
         "p",
-        **{"class": "ocr_par", "id": f"par_{pi}_1", "title": _bbox(union)},
+        **{
+            "class": "ocr_par",
+            "id": f"par_{pi}_1",
+            "title": f"{_bbox(union)}; lang {language}",
+        },
     )
     for li, line in enumerate(page.lines, start=1):
+        # Approximate baseline ~20 % above the line's bottom edge (typical
+        # descender depth). hOCR baseline offset is measured upward from the
+        # bbox bottom and written as a negative number.
+        descender = max(1, line.box.height() // 5)
         line_span = _sub(
             par,
             "span",
             **{
                 "class": "ocr_line",
                 "id": f"line_{pi}_{li}",
-                "title": f"{_bbox(line.box)}; baseline 0 0",
+                "title": f"{_bbox(line.box)}; baseline 0 -{descender}; lang {language}",
             },
         )
         for wi, (word, wbox) in enumerate(
@@ -164,7 +175,7 @@ def _build_page(body, page: PageResult, pi: int, confidence: int) -> None:
                 **{
                     "class": "ocrx_word",
                     "id": f"word_{pi}_{li}_{wi}",
-                    "title": f"{_bbox(wbox)}; x_wconf {confidence}",
+                    "title": f"{_bbox(wbox)}; x_wconf {line.confidence}",
                 },
             )
             w.text = word

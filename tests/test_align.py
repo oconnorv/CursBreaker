@@ -145,6 +145,26 @@ def test_equal_counts_zip_with_accurate_text():
     # Boxes come from the detection pass.
     assert result[0].box_2d == detected[0].box_2d
     assert result[1].box_2d == detected[1].box_2d
+    # Matched lines should not be flagged as interpolated.
+    assert all(not r.is_interpolated for r in result)
+
+
+def test_interpolated_lines_carry_provenance_flag():
+    # 4 transcription lines but only 2 detected. The trailing 2 are
+    # interpolated and should be flagged so the hOCR builder can lower their
+    # word confidence.
+    transcription = ["a", "b", "c", "d"]
+    detected = [_box("a", 100), _box("b", 200)]
+    result = align_lines(transcription, detected)
+    assert [r.text for r in result] == transcription
+    assert [r.is_interpolated for r in result] == [False, False, True, True]
+
+
+def test_synthetic_layout_marks_everything_interpolated():
+    # No detected boxes at all -> the synthesized stack is entirely guessed.
+    result = align_lines(["x", "y", "z"], [])
+    assert [r.text for r in result] == ["x", "y", "z"]
+    assert all(r.is_interpolated for r in result)
 
 
 def test_more_transcription_lines_than_boxes_keeps_all_text():

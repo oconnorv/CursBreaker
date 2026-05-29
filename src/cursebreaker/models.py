@@ -26,6 +26,19 @@ class LineBox(BaseModel):
     box_2d: list[int]
 
 
+class PlacedLine(BaseModel):
+    """A line text placed onto a normalized box, with provenance.
+
+    Used internally between alignment and the pipeline. ``is_interpolated`` is
+    ``True`` for boxes the aligner had to estimate (no matching detected box),
+    so the hOCR builder can mark them with a lower word confidence.
+    """
+
+    text: str
+    box_2d: list[int]
+    is_interpolated: bool = False
+
+
 class PixelBox(BaseModel):
     """An axis-aligned box in real image pixels (origin top-left)."""
 
@@ -46,6 +59,9 @@ class TranscribedLine(BaseModel):
 
     text: str
     box: PixelBox
+    # Word-level confidence written into hOCR (x_wconf). A lower value flags
+    # lines whose bounding box was interpolated rather than detected.
+    confidence: int = 95
 
 
 class PageResult(BaseModel):

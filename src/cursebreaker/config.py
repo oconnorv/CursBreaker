@@ -43,7 +43,9 @@ class Settings(BaseModel):
     use_mock: bool = False  # exercise the full app without a real API key
 
     # --- Output ---
-    word_confidence: int = 95  # nominal x_wconf written into hOCR words
+    word_confidence: int = 95  # x_wconf for words on detected lines
+    interpolated_confidence: int = 60  # x_wconf for words on interpolated lines
+    language: str = "en"  # used for xml:lang and per-line "lang" in hOCR
 
     def public_dict(self) -> dict:
         """Settings safe to send to the browser (API key presence only)."""

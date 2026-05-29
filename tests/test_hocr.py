@@ -91,3 +91,50 @@ def test_build_hocr_multiple_pages():
     out = build_hocr([_page([]), _page([])])
     root = etree.fromstring(out)
     assert len(root.xpath("//x:div[@class='ocr_page']", namespaces=NS)) == 2
+
+
+def test_build_hocr_emits_language_and_baseline_and_per_line_confidence():
+    lines = [
+        TranscribedLine(
+            text="detected line",
+            box=PixelBox(x0=10, y0=10, x1=300, y1=110),  # height 100
+            confidence=95,
+        ),
+        TranscribedLine(
+            text="guessed line",
+            box=PixelBox(x0=10, y0=130, x1=300, y1=230),
+            confidence=60,
+        ),
+    ]
+    out = build_hocr([_page(lines)], language="fr")
+    root = etree.fromstring(out)
+
+    # html-level language picks up the setting
+    xml_lang = root.get("{http://www.w3.org/XML/1998/namespace}lang")
+    assert xml_lang == "fr"
+
+    # ocr_par carries the language too
+    par_title = root.xpath("//x:p[@class='ocr_par']/@title", namespaces=NS)[0]
+    assert "lang fr" in par_title
+
+    # Each line title contains a real baseline offset (not 0 0) and the lang.
+    line_titles = root.xpath("//x:span[@class='ocr_line']/@title", namespaces=NS)
+    assert all("lang fr" in t for t in line_titles)
+    # 100 / 5 = 20 so the first line gets "baseline 0 -20".
+    assert "baseline 0 -20" in line_titles[0]
+    assert "baseline 0 0" not in line_titles[0]
+
+    # Word confidences come from each line, not a shared default.
+    line_spans = root.xpath("//x:span[@class='ocr_line']", namespaces=NS)
+    confs_line1 = [
+        w.get("title") for w in line_spans[0].xpath(
+            "./x:span[@class='ocrx_word']", namespaces=NS
+        )
+    ]
+    confs_line2 = [
+        w.get("title") for w in line_spans[1].xpath(
+            "./x:span[@class='ocrx_word']", namespaces=NS
+        )
+    ]
+    assert all("x_wconf 95" in t for t in confs_line1)
+    assert all("x_wconf 60" in t for t in confs_line2)

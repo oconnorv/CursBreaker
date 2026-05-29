@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
-from .models import LineBox
+from .models import LineBox, PlacedLine
 
 # Gap between consecutive sorted left-edge coordinates that we treat as a
 # column boundary. Coordinates are normalized 0-1000, so 100 ≈ 10 % of the
@@ -173,12 +173,14 @@ def _norm(s: str) -> str:
 
 def align_lines(
     transcription_lines: list[str], detected: list[LineBox]
-) -> list[LineBox]:
-    """Return ``LineBox`` items carrying the accurate transcription text.
+) -> list[PlacedLine]:
+    """Return ``PlacedLine`` items carrying the accurate transcription text.
 
     The returned boxes are still in normalized 0-1000 space (taken from the
     detected boxes); only the ``text`` is replaced with the authoritative
-    transcription.
+    transcription. ``is_interpolated`` is ``True`` for lines whose box had to
+    be estimated (no matching detection) so downstream consumers can flag
+    them with a reduced word confidence.
     """
     transcription_lines = [t for t in transcription_lines if t.strip()]
     detected = sort_for_reading_order(detected)
@@ -188,13 +190,16 @@ def align_lines(
         # full-width boxes so the page is still usable/searchable.
         return _synthetic_layout(transcription_lines)
     if not transcription_lines:
-        return list(detected)
+        return [
+            PlacedLine(text=d.text, box_2d=list(d.box_2d), is_interpolated=False)
+            for d in detected
+        ]
 
     norm_t = [_norm(t) for t in transcription_lines]
     norm_d = [_norm(d.text) for d in detected]
 
     matcher = SequenceMatcher(a=norm_t, b=norm_d, autojunk=False)
-    result: list[LineBox] = []
+    result: list[PlacedLine] = []
     used_detected = [False] * len(detected)
 
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -202,7 +207,13 @@ def align_lines(
             for k in range(i2 - i1):
                 box = detected[j1 + k]
                 used_detected[j1 + k] = True
-                result.append(LineBox(text=transcription_lines[i1 + k], box_2d=box.box_2d))
+                result.append(
+                    PlacedLine(
+                        text=transcription_lines[i1 + k],
+                        box_2d=list(box.box_2d),
+                        is_interpolated=False,
+                    )
+                )
         elif tag == "replace":
             # Pair the transcription block onto the detected block positionally;
             # any extras beyond the detected block fall through to interpolation
@@ -214,18 +225,30 @@ def align_lines(
                     dj = d_block[idx]
                     used_detected[dj] = True
                     result.append(
-                        LineBox(text=transcription_lines[ti], box_2d=list(detected[dj].box_2d))
+                        PlacedLine(
+                            text=transcription_lines[ti],
+                            box_2d=list(detected[dj].box_2d),
+                            is_interpolated=False,
+                        )
                     )
                 else:
                     result.append(
-                        LineBox(text=transcription_lines[ti], box_2d=_interp_box(result, detected))
+                        PlacedLine(
+                            text=transcription_lines[ti],
+                            box_2d=_interp_box(result, detected),
+                            is_interpolated=True,
+                        )
                     )
         elif tag == "delete":
             # Transcription lines with no detected counterpart: place them with
             # an interpolated box derived from neighbors.
             for ti in range(i1, i2):
                 result.append(
-                    LineBox(text=transcription_lines[ti], box_2d=_interp_box(result, detected))
+                    PlacedLine(
+                        text=transcription_lines[ti],
+                        box_2d=_interp_box(result, detected),
+                        is_interpolated=True,
+                    )
                 )
         elif tag == "insert":
             # Detected boxes with no transcription line: keep their own text so
@@ -233,12 +256,18 @@ def align_lines(
             for dj in range(j1, j2):
                 if not used_detected[dj]:
                     used_detected[dj] = True
-                    result.append(LineBox(text=detected[dj].text, box_2d=detected[dj].box_2d))
+                    result.append(
+                        PlacedLine(
+                            text=detected[dj].text,
+                            box_2d=list(detected[dj].box_2d),
+                            is_interpolated=False,
+                        )
+                    )
 
     return result
 
 
-def _median_step(boxes: list[LineBox], fallback: float) -> float:
+def _median_step(boxes, fallback: float) -> float:
     """Median y-step (``ymin_{i+1} - ymin_i``) between consecutive boxes."""
     if len(boxes) < 2:
         return fallback
@@ -252,11 +281,15 @@ def _median_step(boxes: list[LineBox], fallback: float) -> float:
     return sorted(steps)[len(steps) // 2]
 
 
-def _interp_box(placed: list[LineBox], detected: list[LineBox]) -> list[int]:
+def _interp_box(placed, detected) -> list[int]:
     """Best-effort box for an unmatched transcription line: positioned below
     the most recent placement at the column's typical line cadence so that a
     run of extras extends the column at the same rhythm as the detected lines
-    instead of stacking tightly on top of each other."""
+    instead of stacking tightly on top of each other.
+
+    Accepts either ``LineBox`` or ``PlacedLine`` entries — both expose
+    ``box_2d``.
+    """
     if placed:
         prev = placed[-1].box_2d
         height = max(20, prev[2] - prev[0])
@@ -270,16 +303,22 @@ def _interp_box(placed: list[LineBox], detected: list[LineBox]) -> list[int]:
     return [0, 0, 40, 1000]
 
 
-def _synthetic_layout(lines: list[str]) -> list[LineBox]:
+def _synthetic_layout(lines: list[str]) -> list[PlacedLine]:
     if not lines:
         return []
     n = len(lines)
     margin = 40
     usable = 1000 - 2 * margin
     step = usable / n
-    out: list[LineBox] = []
+    out: list[PlacedLine] = []
     for i, text in enumerate(lines):
         ymin = int(margin + i * step)
         ymax = int(margin + (i + 1) * step) - 4
-        out.append(LineBox(text=text, box_2d=[ymin, margin, ymax, 1000 - margin]))
+        out.append(
+            PlacedLine(
+                text=text,
+                box_2d=[ymin, margin, ymax, 1000 - margin],
+                is_interpolated=True,
+            )
+        )
     return out

@@ -17,7 +17,7 @@ from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
 from .images import load_pages
-from .models import PageResult, TranscribedLine
+from .models import PageResult, PlacedLine, TranscribedLine
 from .searchable_pdf import build_searchable_pdf
 
 ProgressCb = Callable[[int, int, str], None]
@@ -40,18 +40,31 @@ def process_page(loaded, provider: TranscriptionProvider, settings: Settings) ->
     if settings.mode == "one_pass":
         items = provider.transcribe_with_boxes(png)
         plain_text = "\n".join(i.text for i in items)
-        wire_lines = items
+        # one-pass output is all freshly detected — nothing interpolated.
+        placed: list[PlacedLine] = [
+            PlacedLine(text=i.text, box_2d=list(i.box_2d), is_interpolated=False)
+            for i in items
+        ]
     else:
         text = provider.transcribe_text(png)
         detected = provider.detect_lines(png)
-        wire_lines = align_lines(text.splitlines(), detected)
+        placed = align_lines(text.splitlines(), detected)
         plain_text = text
 
     w, h = loaded.sent_width, loaded.sent_height
-    lines = [
-        TranscribedLine(text=item.text, box=normalized_to_pixel(item.box_2d, w, h))
-        for item in wire_lines
-    ]
+    lines: list[TranscribedLine] = []
+    for p in placed:
+        conf = (
+            settings.interpolated_confidence if p.is_interpolated
+            else settings.word_confidence
+        )
+        lines.append(
+            TranscribedLine(
+                text=p.text,
+                box=normalized_to_pixel(p.box_2d, w, h),
+                confidence=conf,
+            )
+        )
     return PageResult(
         image_name=f"{loaded.output_stem}.png",
         width=w,
@@ -96,7 +109,7 @@ def process_file(
     hocr_bytes = build_hocr(
         page_results,
         ocr_system=f"CurseBreaker ({settings.mode})",
-        confidence=settings.word_confidence,
+        language=settings.language,
     )
     (out_dir / hocr_name).write_bytes(hocr_bytes)
 
