@@ -73,6 +73,33 @@ def test_keeps_tightly_spaced_real_lines():
     assert [b.text for b in out] == ["A", "B", "C"]
 
 
+def test_clamps_anomalously_tall_box_to_column_median_height():
+    # 3 normal-height lines + 1 line where the detected box swallowed extra
+    # whitespace and ended up 2.5x as tall. The tall one should be clamped to
+    # the column's median height so it doesn't overlap the next line.
+    boxes = [
+        LineBox(text="a",    box_2d=[100, 50, 120, 800]),  # h=20
+        LineBox(text="b",    box_2d=[130, 50, 150, 800]),  # h=20
+        LineBox(text="c",    box_2d=[160, 50, 180, 800]),  # h=20
+        LineBox(text="tall", box_2d=[190, 50, 240, 800]),  # h=50
+    ]
+    out = sort_for_reading_order(boxes)
+    tall = next(b for b in out if b.text == "tall")
+    assert tall.box_2d[2] - tall.box_2d[0] == 20  # clamped to median
+
+
+def test_does_not_clamp_modestly_taller_boxes():
+    # Within 1.3 * median, no clamp — variation in handwriting line height is
+    # normal and not something to flatten.
+    boxes = [
+        LineBox(text="a", box_2d=[100, 50, 120, 800]),  # h=20
+        LineBox(text="b", box_2d=[130, 50, 152, 800]),  # h=22
+        LineBox(text="c", box_2d=[170, 50, 195, 800]),  # h=25 (1.13 * median)
+    ]
+    out = sort_for_reading_order(boxes)
+    assert sorted(b.box_2d[2] - b.box_2d[0] for b in out) == [20, 22, 25]
+
+
 def test_normalizes_a_lone_narrow_box_to_column_width():
     # Most of the column is around x 100-700; one box only covers x 100-150.
     # That partial detection should be expanded toward the column's typical

@@ -37,6 +37,11 @@ _DUPLICATE_Y_OVERLAP = 0.5
 # Boxes narrower than this fraction of the column's median width are treated
 # as partial detections and expanded to the column's typical x-range.
 _NARROW_WIDTH_RATIO = 0.5
+# Boxes taller than this multiple of the column's median height are clamped
+# back to the median height. Gemini occasionally returns a box that spans
+# extra whitespace below the line, which inflates the synthesized word boxes
+# and can visibly overlap the next line on the overlay.
+_TALL_HEIGHT_RATIO = 1.3
 
 
 def _identify_columns(detected: list[LineBox]) -> list[list[LineBox]]:
@@ -119,14 +124,36 @@ def _normalize_column_x(column: list[LineBox]) -> list[LineBox]:
     return out
 
 
+def _normalize_column_heights(column: list[LineBox]) -> list[LineBox]:
+    """Clamp anomalously tall line boxes back to the column's median height."""
+    if len(column) < 3:
+        return list(column)
+    heights = sorted(b.box_2d[2] - b.box_2d[0] for b in column)
+    median_height = heights[len(heights) // 2]
+    if median_height <= 0:
+        return list(column)
+    threshold = median_height * _TALL_HEIGHT_RATIO
+    out: list[LineBox] = []
+    for b in column:
+        y0, x0, y1, x1 = b.box_2d
+        if (y1 - y0) > threshold:
+            out.append(
+                LineBox(text=b.text, box_2d=[y0, x0, y0 + median_height, x1])
+            )
+        else:
+            out.append(b)
+    return out
+
+
 def sort_for_reading_order(detected: list[LineBox]) -> list[LineBox]:
     """Return ``detected`` re-ordered column-major.
 
     Detection sometimes yields paired wide+narrow boxes for the same physical
-    line, plus the occasional spurious sliver covering only a fragment. We
-    deduplicate by y-overlap within each column and snap surviving narrow
-    detections to the column's median x-range, then sort each column top-to-
-    bottom and concatenate left-to-right.
+    line, partial slivers covering one word, or boxes that swallow extra
+    whitespace below the line. We deduplicate by y-overlap, snap surviving
+    narrow boxes to the column's median x-range, clamp anomalously tall boxes
+    to the median height, then sort each column top-to-bottom and concatenate
+    left-to-right.
     """
     if len(detected) <= 1:
         return list(detected)
@@ -134,6 +161,7 @@ def sort_for_reading_order(detected: list[LineBox]) -> list[LineBox]:
     for column in _identify_columns(detected):
         column = _dedupe_overlapping_y(column)
         column = _normalize_column_x(column)
+        column = _normalize_column_heights(column)
         column.sort(key=lambda b: b.box_2d[0])  # ymin: top to bottom
         result.extend(column)
     return result
