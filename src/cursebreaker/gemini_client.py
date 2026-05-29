@@ -27,13 +27,20 @@ SUGGESTED_MODELS = [
     "gemini-2.5-flash",
 ]
 
+_READING_ORDER_RULE = (
+    "Use natural reading order: if the page has multiple columns, finish each "
+    "column from top to bottom before moving on to the next column (left to "
+    "right). For a single column, just go top to bottom."
+)
+
 PROMPT_TRANSCRIBE = (
     "You are an expert paleographer. Carefully transcribe the handwriting in "
-    "this document image. Transcribe every line of the main text in natural "
-    "reading order, preserving the original line breaks (one source line per "
-    "output line). Expand nothing, correct nothing, and translate nothing - "
-    "reproduce the text exactly as written. Respond with ONLY the transcription "
-    "text: no commentary, labels, or code fences."
+    "this document image. Transcribe every line of the main text, preserving "
+    "the original line breaks (one source line per output line). "
+    + _READING_ORDER_RULE
+    + " Expand nothing, correct nothing, and translate nothing - reproduce the "
+    "text exactly as written. Respond with ONLY the transcription text: no "
+    "commentary, labels, or code fences."
 )
 
 PROMPT_DETECT = (
@@ -41,9 +48,10 @@ PROMPT_DETECT = (
     "Return a JSON array where each element has two fields: 'text' (your "
     "accurate transcription of that single line, exactly as written) and "
     "'box_2d' (the line's bounding box as [ymin, xmin, ymax, xmax], integers "
-    "normalized to 0-1000 with the origin at the top-left). List the lines in "
-    "natural reading order, top to bottom, one element per source line. Do not "
-    "merge separate lines. Never return masks, explanations, or code fences."
+    "normalized to 0-1000 with the origin at the top-left). "
+    + _READING_ORDER_RULE
+    + " One element per source line. Do not merge separate lines. Never return "
+    "masks, explanations, or code fences."
 )
 
 PROMPT_ONE_PASS = (
@@ -51,8 +59,10 @@ PROMPT_ONE_PASS = (
     "Return a JSON array where each element has 'text' (the accurate "
     "transcription of one source line, reproduced exactly as written) and "
     "'box_2d' ([ymin, xmin, ymax, xmax] integers normalized to 0-1000, origin "
-    "top-left). Use natural reading order, top to bottom, one element per source "
-    "line. Never return masks, explanations, or code fences."
+    "top-left). "
+    + _READING_ORDER_RULE
+    + " One element per source line. Never return masks, explanations, or code "
+    "fences."
 )
 
 
