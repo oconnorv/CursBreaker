@@ -22,10 +22,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pyinstaller
       - name: Build
-        run: pyinstaller packaging/cursebreaker.spec
+        run: pyinstaller packaging/cursbreaker.spec
       - uses: actions/upload-artifact@v4
         with:
-          name: cursebreaker-${{ matrix.os }}
+          name: cursbreaker-${{ matrix.os }}
           path: dist/*
 
   test:

@@ -101,7 +101,7 @@ def _sub(parent, tag: str, **attrib) -> etree._Element:
 def build_hocr(
     pages: list[PageResult],
     *,
-    ocr_system: str = "CurseBreaker",
+    ocr_system: str = "CursBreaker",
     language: str = "en",
 ) -> bytes:
     html = etree.Element(_q("html"), nsmap={None: XHTML_NS})
@@ -109,7 +109,7 @@ def build_hocr(
 
     head = _sub(html, "head")
     title = _sub(head, "title")
-    title.text = "CurseBreaker hOCR"
+    title.text = "CursBreaker hOCR"
     _sub(head, "meta", http_equiv="Content-Type", content="text/html; charset=utf-8")
     _sub(head, "meta", name="ocr-system", content=ocr_system)
     _sub(head, "meta", name="ocr-capabilities", content=CAPABILITIES)

@@ -1,10 +1,10 @@
 import pytest
 from lxml import etree
 
-from cursebreaker.config import Settings
-from cursebreaker.gemini_client import MockProvider
-from cursebreaker.hocr import XHTML_NS
-from cursebreaker.pipeline import process_batch, process_file
+from cursbreaker.config import Settings
+from cursbreaker.gemini_client import MockProvider
+from cursbreaker.hocr import XHTML_NS
+from cursbreaker.pipeline import process_batch, process_file
 
 NS = {"x": XHTML_NS}
 
@@ -20,7 +20,7 @@ def test_process_image_writes_outputs(png_path, tmp_path, mode):
     assert result.n_lines == 4  # the mock returns four lines
 
     txt = (out / "sample.txt").read_text("utf-8")
-    assert "CurseBreaker mock transcription" in txt
+    assert "CursBreaker mock transcription" in txt
 
     hocr = (out / "sample.hocr").read_bytes()
     root = etree.fromstring(hocr)

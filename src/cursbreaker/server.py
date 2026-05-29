@@ -1,4 +1,4 @@
-"""FastAPI app for the local CurseBreaker GUI.
+"""FastAPI app for the local CursBreaker GUI.
 
 Everything runs on the user's machine and binds to localhost. Uploaded files are
 copied into a temp staging area; each processing run writes its outputs to a
@@ -34,10 +34,10 @@ from .pipeline import process_batch
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="CurseBreaker", version=__version__)
+app = FastAPI(title="CursBreaker", version=__version__)
 
 # In-memory state for this single-user local session.
-_BASE = Path(tempfile.mkdtemp(prefix="cursebreaker_"))
+_BASE = Path(tempfile.mkdtemp(prefix="cursbreaker_"))
 STAGE_DIR = _BASE / "stage"
 JOBS_DIR = _BASE / "jobs"
 STAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -237,7 +237,7 @@ def download_zip(job_id: str):
     return Response(
         buf.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="cursebreaker_{job_id[:8]}.zip"'},
+        headers={"Content-Disposition": f'attachment; filename="cursbreaker_{job_id[:8]}.zip"'},
     )
 
 
@@ -356,7 +356,7 @@ def install_access_log_filter() -> None:
     import logging
 
     class _HideHeartbeat(logging.Filter):
-        _cursebreaker_heartbeat = True
+        _cursbreaker_heartbeat = True
 
         def filter(self, record):  # noqa: A003 (logging API name)
             try:
@@ -370,7 +370,7 @@ def install_access_log_filter() -> None:
             return True
 
     logger = logging.getLogger("uvicorn.access")
-    if not any(getattr(f, "_cursebreaker_heartbeat", False) for f in logger.filters):
+    if not any(getattr(f, "_cursbreaker_heartbeat", False) for f in logger.filters):
         logger.addFilter(_HideHeartbeat())
 
 
@@ -379,7 +379,7 @@ def install_access_log_filter() -> None:
 # --------------------------------------------------------------------------- #
 @app.get("/favicon.ico")
 def favicon():
-    # Drop a favicon.ico into src/cursebreaker/static/ to use a custom one;
+    # Drop a favicon.ico into src/cursbreaker/static/ to use a custom one;
     # otherwise reply 204 so browsers stop asking and we don't log a 404.
     f = STATIC_DIR / "favicon.ico"
     if f.is_file():

@@ -1,15 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Cross-platform PyInstaller spec. Build with: pyinstaller packaging/cursebreaker.spec
+"""Cross-platform PyInstaller spec. Build with: pyinstaller packaging/cursbreaker.spec
 
 NOTE: this is a starting point and has not yet been validated on a real CI
 runner. The key requirements it encodes are (1) bundling the static web UI under
-``cursebreaker/static`` so the server can find it at runtime, and (2) collecting
+``cursbreaker/static`` so the server can find it at runtime, and (2) collecting
 uvicorn/fastapi/google-genai submodules that PyInstaller's static analysis misses.
 """
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [("../src/cursebreaker/static", "cursebreaker/static")]
+datas = [("../src/cursbreaker/static", "cursbreaker/static")]
 binaries = []
 hiddenimports = collect_submodules("uvicorn")
 
@@ -38,7 +38,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="cursebreaker",
+    name="cursbreaker",
     console=True,
     disable_windowed_traceback=False,
     upx=True,

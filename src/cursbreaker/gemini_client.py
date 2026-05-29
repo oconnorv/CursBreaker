@@ -246,7 +246,7 @@ class MockProvider:
     """Deterministic sample output for keyless testing and demos."""
 
     _LINES = [
-        "This is a CurseBreaker mock transcription.",
+        "This is a CursBreaker mock transcription.",
         "It runs without a Gemini API key.",
         "Each detected line carries a bounding box.",
         "Add your own key in Settings for real results.",

@@ -108,7 +108,7 @@ def process_file(
 
     hocr_bytes = build_hocr(
         page_results,
-        ocr_system=f"CurseBreaker ({settings.mode})",
+        ocr_system=f"CursBreaker ({settings.mode})",
         language=settings.language,
     )
     (out_dir / hocr_name).write_bytes(hocr_bytes)

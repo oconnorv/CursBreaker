@@ -1,8 +1,8 @@
-# CurseBreaker
+# CursBreaker
 
 **Turn handwriting into searchable text — and know where every word sits on the page.**
 
-CurseBreaker is a small, local desktop application (it runs in your browser) that
+CursBreaker is a small, local desktop application (it runs in your browser) that
 sends document images to **Google Gemini** for high-accuracy handwriting
 transcription, then produces two things for each page:
 
@@ -11,7 +11,7 @@ transcription, then produces two things for each page:
    pixel locations on the image — making the page keyword-searchable and
    findable, the same way Tesseract or ABBYY output works for printed text.
 
-You bring your **own** Gemini API key; CurseBreaker never ships or phones home
+You bring your **own** Gemini API key; CursBreaker never ships or phones home
 with anyone else's.
 
 ---
@@ -21,14 +21,14 @@ with anyone else's.
 Recent work (notably Mark Humphries' [*Gemini 3 Solves Handwriting
 Recognition*](https://generativehistory.substack.com/p/gemini-3-solves-handwriting-recognition))
 showed that Gemini can transcribe historical cursive at near-human accuracy.
-But a transcript alone can't tell you *where* a word is on the page. CurseBreaker
+But a transcript alone can't tell you *where* a word is on the page. CursBreaker
 adds that missing half: it asks Gemini for **line bounding boxes** alongside the
 text and converts everything into standards-compliant hOCR.
 
 ### How localization works
 
 Gemini returns spatial coordinates as `box_2d = [ymin, xmin, ymax, xmax]`,
-normalized to a 0–1000 grid (origin top-left). CurseBreaker:
+normalized to a 0–1000 grid (origin top-left). CursBreaker:
 
 1. converts those to real pixels using the page dimensions;
 2. emits one hOCR `ocr_line` per detected line; and
@@ -45,16 +45,16 @@ Requires Python 3.10+.
 
 ```bash
 # from source
-git clone https://github.com/oconnorv/cursebreaker.git
-cd cursebreaker
+git clone https://github.com/oconnorv/cursbreaker.git
+cd cursbreaker
 pip install .
 
 # then run
-cursebreaker
+cursbreaker
 ```
 
 This starts a local server and opens `http://127.0.0.1:8765/` in your browser.
-Use `cursebreaker --no-browser --port 9000` to change the defaults.
+Use `cursbreaker --no-browser --port 9000` to change the defaults.
 
 > Prefer not to install Python? See **Downloads / packaging** below for
 > standalone builds.
@@ -62,7 +62,7 @@ Use `cursebreaker --no-browser --port 9000` to change the defaults.
 ## Get a Gemini API key
 
 Create a key at **Google AI Studio** (<https://aistudio.google.com/apikey>).
-Paste it into CurseBreaker's **Settings → Gemini API key** (stored locally on
+Paste it into CursBreaker's **Settings → Gemini API key** (stored locally on
 your machine with owner-only permissions), or set the `GEMINI_API_KEY`
 environment variable.
 

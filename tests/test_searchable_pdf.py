@@ -1,8 +1,8 @@
 import fitz
 from PIL import Image
 
-from cursebreaker.models import PageResult, PixelBox, TranscribedLine
-from cursebreaker.searchable_pdf import build_searchable_pdf
+from cursbreaker.models import PageResult, PixelBox, TranscribedLine
+from cursbreaker.searchable_pdf import build_searchable_pdf
 
 
 def _png(tmp_path, name, size=(400, 200)):

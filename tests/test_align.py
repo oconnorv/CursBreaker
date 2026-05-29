@@ -1,5 +1,5 @@
-from cursebreaker.align import align_lines, sort_for_reading_order
-from cursebreaker.models import LineBox
+from cursbreaker.align import align_lines, sort_for_reading_order
+from cursbreaker.models import LineBox
 
 
 def _box(text, ymin):

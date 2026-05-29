@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cursebreaker"
+name = "cursbreaker"
 version = "0.1.0"
 description = "Transcribe handwriting with Google Gemini and export searchable hOCR plus plain text."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-or-later"
-authors = [{ name = "CurseBreaker contributors" }]
+authors = [{ name = "CursBreaker contributors" }]
 keywords = ["ocr", "hocr", "handwriting", "htr", "gemini", "transcription", "digital-humanities"]
 dependencies = [
     "fastapi>=0.110",
@@ -27,13 +27,13 @@ dependencies = [
 dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
-cursebreaker = "cursebreaker.__main__:main"
+cursbreaker = "cursbreaker.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-cursebreaker = ["static/*", "fonts/*"]
+cursbreaker = ["static/*", "fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

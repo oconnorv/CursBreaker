@@ -2,7 +2,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from cursebreaker.server import app
+from cursbreaker.server import app
 
 client = TestClient(app)
 
@@ -138,7 +138,7 @@ def test_favicon_route_never_500s():
 
 
 def test_heartbeat_endpoint_updates_timestamp():
-    from cursebreaker import server
+    from cursbreaker import server
     server._LAST_PING_AT = None
     r = client.post("/api/heartbeat")
     assert r.status_code == 200
@@ -146,7 +146,7 @@ def test_heartbeat_endpoint_updates_timestamp():
 
 
 def test_heartbeat_bye_pulls_timestamp_back():
-    from cursebreaker import server
+    from cursbreaker import server
     import time
 
     server._LAST_PING_AT = None
@@ -159,7 +159,7 @@ def test_heartbeat_bye_pulls_timestamp_back():
 
 
 def test_should_shutdown_predicate():
-    from cursebreaker.server import _should_shutdown
+    from cursbreaker.server import _should_shutdown
     # No ping yet -> never shut down
     assert _should_shutdown(None, 10, now=100) is False
     # Recent ping -> stay up
@@ -173,13 +173,13 @@ def test_should_shutdown_predicate():
 def test_access_log_filter_drops_heartbeat_keeps_others():
     import logging
 
-    from cursebreaker.server import install_access_log_filter
+    from cursbreaker.server import install_access_log_filter
 
     install_access_log_filter()
     logger = logging.getLogger("uvicorn.access")
     our = next(
         f for f in logger.filters
-        if getattr(f, "_cursebreaker_heartbeat", False)
+        if getattr(f, "_cursbreaker_heartbeat", False)
     )
 
     fmt = '%s - "%s %s HTTP/%s" %d'
@@ -206,11 +206,11 @@ def test_access_log_filter_drops_heartbeat_keeps_others():
     # Idempotent: calling twice doesn't stack duplicate filters.
     before = sum(
         1 for f in logger.filters
-        if getattr(f, "_cursebreaker_heartbeat", False)
+        if getattr(f, "_cursbreaker_heartbeat", False)
     )
     install_access_log_filter()
     after = sum(
         1 for f in logger.filters
-        if getattr(f, "_cursebreaker_heartbeat", False)
+        if getattr(f, "_cursbreaker_heartbeat", False)
     )
     assert before == after == 1

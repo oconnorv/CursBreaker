@@ -16,7 +16,7 @@ from pathlib import Path
 from platformdirs import user_config_dir
 from pydantic import BaseModel
 
-APP_NAME = "CurseBreaker"
+APP_NAME = "CursBreaker"
 
 
 class Settings(BaseModel):
@@ -74,7 +74,7 @@ class Settings(BaseModel):
 
 
 def config_path() -> Path:
-    override = os.environ.get("CURSEBREAKER_CONFIG")
+    override = os.environ.get("CURSBREAKER_CONFIG")
     if override:
         return Path(override)
     return Path(user_config_dir(APP_NAME, appauthor=False)) / "settings.json"

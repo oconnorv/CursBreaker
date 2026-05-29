@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
     """Keep tests away from the real user config and any ambient API keys."""
-    monkeypatch.setenv("CURSEBREAKER_CONFIG", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CURSBREAKER_CONFIG", str(tmp_path / "settings.json"))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
 

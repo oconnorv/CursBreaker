@@ -1,6 +1,6 @@
 from PIL import Image, TiffImagePlugin, UnidentifiedImageError
 
-from cursebreaker.images import count_content_pages, is_supported, load_pages
+from cursbreaker.images import count_content_pages, is_supported, load_pages
 
 
 def _tiff_with_thumbnail(path):
@@ -58,7 +58,7 @@ def test_tiff_falls_back_to_fitz_when_pillow_cannot_decode(tmp_path, monkeypatch
             raise UnidentifiedImageError("simulated Pillow decoder failure")
         return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr("cursebreaker.images.Image.open", reject_tiff)
+    monkeypatch.setattr("cursbreaker.images.Image.open", reject_tiff)
 
     pages = load_pages(p, pdf_dpi=72)  # zoom=1.0 in the fitz fallback
     assert len(pages) == 1

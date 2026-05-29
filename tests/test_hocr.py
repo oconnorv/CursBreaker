@@ -1,12 +1,12 @@
 from lxml import etree
 
-from cursebreaker.hocr import (
+from cursbreaker.hocr import (
     XHTML_NS,
     build_hocr,
     normalized_to_pixel,
     split_line_into_words,
 )
-from cursebreaker.models import PageResult, PixelBox, TranscribedLine
+from cursbreaker.models import PageResult, PixelBox, TranscribedLine
 
 NS = {"x": XHTML_NS}
 
