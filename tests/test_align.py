@@ -45,6 +45,49 @@ def test_sort_for_reading_order_handles_three_columns():
     ]
 
 
+def test_dedupes_paired_wide_and_narrow_detections_for_one_line():
+    # Mirrors the right-column issue on the user's index page: Gemini returned
+    # both a wide and a narrow box for the same physical line at nearly the
+    # same y. The narrow sliver should be dropped so it doesn't steal a slot
+    # from a later transcription line.
+    boxes = [
+        LineBox(text="MOSES",  box_2d=[66, 565, 86, 765]),  # wide
+        LineBox(text="x",      box_2d=[72, 508, 86, 540]),  # narrow, same y
+        LineBox(text="MOORE",  box_2d=[91, 562, 110, 887]),  # wide
+        LineBox(text="x",      box_2d=[95, 505, 108, 549]),  # narrow, same y
+    ]
+    out = sort_for_reading_order(boxes)
+    assert [b.text for b in out] == ["MOSES", "MOORE"]
+
+
+def test_keeps_tightly_spaced_real_lines():
+    # Realistic line spacing where the gap between lines is smaller than the
+    # line height itself — but the per-line y overlap stays low enough that
+    # nothing is mistakenly deduped.
+    boxes = [
+        LineBox(text="A", box_2d=[100, 100, 120, 700]),
+        LineBox(text="B", box_2d=[125, 100, 145, 700]),
+        LineBox(text="C", box_2d=[150, 100, 170, 700]),
+    ]
+    out = sort_for_reading_order(boxes)
+    assert [b.text for b in out] == ["A", "B", "C"]
+
+
+def test_normalizes_a_lone_narrow_box_to_column_width():
+    # Most of the column is around x 100-700; one box only covers x 100-150.
+    # That partial detection should be expanded toward the column's typical
+    # right edge so word-box synthesis lands on real text positions.
+    boxes = [
+        LineBox(text="a", box_2d=[100, 100, 120, 700]),
+        LineBox(text="b", box_2d=[140, 100, 160, 700]),
+        LineBox(text="c", box_2d=[180, 100, 200, 700]),
+        LineBox(text="d", box_2d=[220, 100, 240, 150]),  # narrow partial
+    ]
+    out = sort_for_reading_order(boxes)
+    narrow_now = next(b for b in out if b.text == "d")
+    assert narrow_now.box_2d[3] >= 600
+
+
 def test_alignment_unscrambles_multi_column_pages():
     # This reproduces the index-page bug. The transcription pass returned
     # column-major text (all left, then all right); the detection pass returned
@@ -99,3 +142,28 @@ def test_no_transcription_returns_detected():
     detected = [_box("only detected", 100)]
     result = align_lines([], detected)
     assert [r.text for r in result] == ["only detected"]
+
+
+def test_extras_extend_column_at_typical_line_cadence():
+    # 9 transcription lines, only the first 5 detected (matches the right-
+    # column situation on the index page). The 4 unmatched extras should
+    # advance at the typical line spacing observed in the detected boxes
+    # rather than stacking tight on top of the last match.
+    detected = [
+        LineBox(text="row 1", box_2d=[66,  565,  86, 765]),
+        LineBox(text="row 2", box_2d=[91,  565, 110, 765]),
+        LineBox(text="row 3", box_2d=[114, 565, 134, 765]),
+        LineBox(text="row 4", box_2d=[134, 565, 154, 765]),
+        LineBox(text="row 5", box_2d=[155, 565, 175, 765]),
+    ]
+    transcription = [f"line {i}" for i in range(1, 10)]
+    result = align_lines(transcription, detected)
+    assert len(result) == 9
+    # First 5 land on detected positions
+    for i in range(5):
+        assert result[i].box_2d == detected[i].box_2d
+    # The remaining 4 should advance at roughly the same ~22 cadence per step.
+    ymins = [r.box_2d[0] for r in result[4:]]
+    gaps = [b - a for a, b in zip(ymins, ymins[1:])]
+    median_gap = sorted(gaps)[len(gaps) // 2]
+    assert 18 <= median_gap <= 30, f"extras did not extend at column cadence: {gaps}"

@@ -29,30 +29,113 @@ from .models import LineBox
 # page width — large enough to ignore within-column wobble but small enough
 # to catch a real column gutter.
 _COLUMN_GAP_THRESHOLD = 100
+# Two boxes whose vertical overlap exceeds this fraction of the shorter box's
+# height are treated as the same physical line. Gemini sometimes returns one
+# wide and one narrow detection for the same line on dense pages, and the
+# narrow one would otherwise burn a slot in the alignment.
+_DUPLICATE_Y_OVERLAP = 0.5
+# Boxes narrower than this fraction of the column's median width are treated
+# as partial detections and expanded to the column's typical x-range.
+_NARROW_WIDTH_RATIO = 0.5
+
+
+def _identify_columns(detected: list[LineBox]) -> list[list[LineBox]]:
+    """Group boxes into columns via gap-based clustering on the left edge."""
+    if not detected:
+        return []
+    by_xmin = sorted(detected, key=lambda b: b.box_2d[1])
+    columns: list[list[LineBox]] = [[by_xmin[0]]]
+    last_xmin = by_xmin[0].box_2d[1]
+    for b in by_xmin[1:]:
+        xmin = b.box_2d[1]
+        if xmin - last_xmin > _COLUMN_GAP_THRESHOLD:
+            columns.append([])
+        columns[-1].append(b)
+        last_xmin = xmin
+    return columns
+
+
+def _dedupe_overlapping_y(column: list[LineBox]) -> list[LineBox]:
+    """Remove duplicate detections of the same physical line within a column.
+
+    Sometimes Gemini returns two boxes for one line — a wide one covering the
+    whole line and a narrow sliver covering a fragment — at nearly the same y.
+    If both reach alignment, every text line after them shifts by a position.
+    Keep the larger-area box; drop the rest."""
+    if len(column) <= 1:
+        return list(column)
+    by_area = sorted(
+        column,
+        key=lambda b: -((b.box_2d[3] - b.box_2d[1]) * (b.box_2d[2] - b.box_2d[0])),
+    )
+    kept: list[LineBox] = []
+    for b in by_area:
+        y0, y1 = b.box_2d[0], b.box_2d[2]
+        h = y1 - y0
+        if h <= 0:
+            continue
+        duplicate = False
+        for k in kept:
+            ky0, ky1 = k.box_2d[0], k.box_2d[2]
+            overlap = min(y1, ky1) - max(y0, ky0)
+            if overlap > 0:
+                shortest = min(h, ky1 - ky0)
+                if shortest > 0 and overlap / shortest > _DUPLICATE_Y_OVERLAP:
+                    duplicate = True
+                    break
+        if not duplicate:
+            kept.append(b)
+    return kept
+
+
+def _normalize_column_x(column: list[LineBox]) -> list[LineBox]:
+    """Expand boxes that are much narrower than the column's typical width to
+    span the column's median x-range — Gemini's pass occasionally returns a
+    partial-line detection covering only one word."""
+    if len(column) < 3:
+        return list(column)
+    widths = sorted(b.box_2d[3] - b.box_2d[1] for b in column)
+    median_width = widths[len(widths) // 2]
+    if median_width <= 0:
+        return list(column)
+    xmins = sorted(b.box_2d[1] for b in column)
+    xmaxs = sorted(b.box_2d[3] for b in column)
+    col_xmin = xmins[len(xmins) // 2]
+    col_xmax = xmaxs[len(xmaxs) // 2]
+    if col_xmax <= col_xmin:
+        return list(column)
+    out: list[LineBox] = []
+    for b in column:
+        w = b.box_2d[3] - b.box_2d[1]
+        if w < median_width * _NARROW_WIDTH_RATIO:
+            out.append(
+                LineBox(
+                    text=b.text,
+                    box_2d=[b.box_2d[0], col_xmin, b.box_2d[2], col_xmax],
+                )
+            )
+        else:
+            out.append(b)
+    return out
 
 
 def sort_for_reading_order(detected: list[LineBox]) -> list[LineBox]:
-    """Return ``detected`` re-ordered column-major (top-to-bottom within each
-    detected column, columns ordered left-to-right)."""
+    """Return ``detected`` re-ordered column-major.
+
+    Detection sometimes yields paired wide+narrow boxes for the same physical
+    line, plus the occasional spurious sliver covering only a fragment. We
+    deduplicate by y-overlap within each column and snap surviving narrow
+    detections to the column's median x-range, then sort each column top-to-
+    bottom and concatenate left-to-right.
+    """
     if len(detected) <= 1:
         return list(detected)
-
-    # Group boxes by left edge (xmin). Within-column lines share a left margin;
-    # a real column break shows up as a large gap in the sorted sequence.
-    by_xmin = sorted(range(len(detected)), key=lambda i: detected[i].box_2d[1])
-    columns: list[list[int]] = [[by_xmin[0]]]
-    last_xmin = detected[by_xmin[0]].box_2d[1]
-    for idx in by_xmin[1:]:
-        xmin = detected[idx].box_2d[1]
-        if xmin - last_xmin > _COLUMN_GAP_THRESHOLD:
-            columns.append([])
-        columns[-1].append(idx)
-        last_xmin = xmin
-
     result: list[LineBox] = []
-    for column in columns:
-        column.sort(key=lambda i: detected[i].box_2d[0])  # ymin: top to bottom
-        result.extend(detected[i] for i in column)
+    for column in _identify_columns(detected):
+        column = _dedupe_overlapping_y(column)
+        column = _normalize_column_x(column)
+        column.sort(key=lambda b: b.box_2d[0])  # ymin: top to bottom
+        result.extend(column)
     return result
 
 
@@ -93,16 +176,17 @@ def align_lines(
                 used_detected[j1 + k] = True
                 result.append(LineBox(text=transcription_lines[i1 + k], box_2d=box.box_2d))
         elif tag == "replace":
-            # Map the block of transcription lines onto the block of detected
-            # boxes positionally; if counts differ, share boxes by ratio.
+            # Pair the transcription block onto the detected block positionally;
+            # any extras beyond the detected block fall through to interpolation
+            # rather than piling up on the last detected box.
             t_block = list(range(i1, i2))
             d_block = list(range(j1, j2))
             for idx, ti in enumerate(t_block):
-                if d_block:
-                    dj = d_block[min(idx, len(d_block) - 1)]
+                if idx < len(d_block):
+                    dj = d_block[idx]
                     used_detected[dj] = True
                     result.append(
-                        LineBox(text=transcription_lines[ti], box_2d=detected[dj].box_2d)
+                        LineBox(text=transcription_lines[ti], box_2d=list(detected[dj].box_2d))
                     )
                 else:
                     result.append(
@@ -126,13 +210,30 @@ def align_lines(
     return result
 
 
+def _median_step(boxes: list[LineBox], fallback: float) -> float:
+    """Median y-step (``ymin_{i+1} - ymin_i``) between consecutive boxes."""
+    if len(boxes) < 2:
+        return fallback
+    steps = [
+        b.box_2d[0] - a.box_2d[0]
+        for a, b in zip(boxes, boxes[1:])
+        if b.box_2d[0] > a.box_2d[0]
+    ]
+    if not steps:
+        return fallback
+    return sorted(steps)[len(steps) // 2]
+
+
 def _interp_box(placed: list[LineBox], detected: list[LineBox]) -> list[int]:
-    """Best-effort box for an unmatched transcription line: just below the last
-    placed box, or a default full-width strip near the top."""
+    """Best-effort box for an unmatched transcription line: positioned below
+    the most recent placement at the column's typical line cadence so that a
+    run of extras extends the column at the same rhythm as the detected lines
+    instead of stacking tightly on top of each other."""
     if placed:
         prev = placed[-1].box_2d
         height = max(20, prev[2] - prev[0])
-        ymin = min(990, prev[2] + 5)
+        step = max(int(_median_step(placed, height + 5)), height + 1)
+        ymin = min(990, prev[0] + step)
         ymax = min(1000, ymin + height)
         return [ymin, prev[1], ymax, prev[3]]
     if detected:
