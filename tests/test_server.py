@@ -122,6 +122,15 @@ def test_download_unknown_job_is_404():
     assert r.status_code == 404
 
 
+def test_index_credits_mark_humphries_and_authorship():
+    html = client.get("/").text
+    assert "Mark Humphries" in html
+    assert "Generative History" in html
+    assert "generativehistory.substack.com" in html
+    assert "John O'Connor" in html
+    assert "Charlotte Mecklenburg Library" in html
+
+
 def test_favicon_route_never_500s():
     # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
     r = client.get("/favicon.ico")
