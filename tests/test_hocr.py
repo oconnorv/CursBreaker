@@ -6,7 +6,7 @@ from cursbreaker.hocr import (
     normalized_to_pixel,
     split_line_into_words,
 )
-from cursbreaker.models import PageResult, PixelBox, TranscribedLine
+from cursbreaker.models import OcrWord, PageResult, PixelBox, TranscribedLine
 
 NS = {"x": XHTML_NS}
 
@@ -91,6 +91,50 @@ def test_build_hocr_multiple_pages():
     out = build_hocr([_page([]), _page([])])
     root = etree.fromstring(out)
     assert len(root.xpath("//x:div[@class='ocr_page']", namespaces=NS)) == 2
+
+
+def test_build_hocr_uses_real_word_boxes_when_present():
+    # A Tesseract-style line where `words` carries per-word data: the builder
+    # must use those exact boxes and confidences, NOT the proportional split.
+    words = [
+        OcrWord(text="hello",  box=PixelBox(x0=10,  y0=10, x1=100, y1=40), confidence=92),
+        OcrWord(text="world!", box=PixelBox(x0=200, y0=10, x1=350, y1=40), confidence=70),
+    ]
+    line = TranscribedLine(
+        text="hello world!",
+        box=PixelBox(x0=10, y0=10, x1=350, y1=40),
+        confidence=95,
+        words=words,
+    )
+    out = build_hocr([_page([line])])
+    root = etree.fromstring(out)
+    word_spans = root.xpath("//x:span[@class='ocrx_word']", namespaces=NS)
+    titles = [w.get("title") for w in word_spans]
+    texts = [w.text for w in word_spans]
+    assert texts == ["hello", "world!"]
+    # Real boxes show through verbatim.
+    assert "bbox 10 10 100 40" in titles[0]
+    assert "bbox 200 10 350 40" in titles[1]
+    # And per-word confidence comes from the OcrWord, not the line-level fallback.
+    assert "x_wconf 92" in titles[0]
+    assert "x_wconf 70" in titles[1]
+
+
+def test_build_hocr_falls_back_to_synthesized_words_when_no_word_data():
+    # A Gemini-style line with no per-word data: builder must still emit words
+    # via proportional split (existing behavior preserved).
+    line = TranscribedLine(
+        text="alpha beta",
+        box=PixelBox(x0=0, y0=0, x1=200, y1=20),
+        confidence=80,
+    )
+    out = build_hocr([_page([line])])
+    root = etree.fromstring(out)
+    texts = [w.text for w in root.xpath("//x:span[@class='ocrx_word']", namespaces=NS)]
+    assert texts == ["alpha", "beta"]
+    titles = [w.get("title") for w in root.xpath("//x:span[@class='ocrx_word']", namespaces=NS)]
+    # Both words inherit the line-level confidence in the fallback path.
+    assert all("x_wconf 80" in t for t in titles)
 
 
 def test_build_hocr_emits_language_and_baseline_and_per_line_confidence():

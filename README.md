@@ -59,6 +59,31 @@ Use `cursbreaker --no-browser --port 9000` to change the defaults.
 > Prefer not to install Python? See **Downloads / packaging** below for
 > standalone builds.
 
+### Optional: Tesseract (for printed/mixed documents)
+
+The **Mixed** and **Printed only** content types use [Tesseract
+OCR](https://github.com/tesseract-ocr/tesseract) locally for typeset text.
+Tesseract is excellent on clean printed text, runs without an API call, and
+gives us *real* per-word boxes and confidences — strictly better than the
+proportional word-box synthesis used for handwriting. CursBreaker works
+without it (Handwriting mode is unaffected); install it when you want the
+other two modes:
+
+```bash
+# Linux (Debian/Ubuntu)
+sudo apt install tesseract-ocr
+
+# macOS
+brew install tesseract
+
+# Windows
+# Use the UB-Mannheim installer:
+#   https://github.com/UB-Mannheim/tesseract/wiki
+```
+
+The Settings panel shows a green/red status badge for Tesseract and lists the
+language packs it can see (install e.g. `tesseract-ocr-fra` to add French).
+
 ## Get a Gemini API key
 
 Create a key at **Google AI Studio** (<https://aistudio.google.com/apikey>).
@@ -79,7 +104,15 @@ environment variable.
 No API key handy? Flip on **Demo mode** to exercise the whole workflow with
 sample output.
 
-### Two modes (you choose per run)
+### Content type (you choose per batch)
+
+| Content type | What it does | When to use |
+|---|---|---|
+| **Handwriting** (default) | Gemini transcribes the whole page (existing recipe). | Pages that are predominantly handwritten. |
+| **Mixed** | Gemini classifies each line printed/handwritten in one call. Printed lines go to **Tesseract** (real per-word boxes); handwritten lines use Gemini. Outputs are merged locally — **Gemini never sees Tesseract's text** (per Humphries, that confuses it). | Letters with typeset letterhead + handwritten body; ledgers with printed headers + handwritten entries. |
+| **Printed only** | Tesseract OCRs the whole page locally. **No Gemini call** (no API cost). | Fully typeset documents. |
+
+### Two modes for handwriting (Two-pass / One-pass)
 
 | Mode | What it does | Trade-off |
 |------|--------------|-----------|

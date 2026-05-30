@@ -21,7 +21,7 @@ async function api(method, url, body) {
 
 // ---- settings ----------------------------------------------------------- //
 const NUMERIC = ["temperature", "pdf_dpi", "max_dimension", "word_confidence"];
-const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution"];
+const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution", "tesseract_language"];
 const BOOL = ["use_mock", "preprocess"];
 
 function gatherSettings() {
@@ -34,6 +34,8 @@ function gatherSettings() {
   for (const id of BOOL) s[id] = $(id).checked;
   const mode = document.querySelector("input[name=mode]:checked");
   if (mode) s.mode = mode.value;
+  const ct = document.querySelector("input[name=content_type]:checked");
+  if (ct) s.content_type = ct.value;
   return s;
 }
 
@@ -68,7 +70,41 @@ async function loadSettings() {
   for (const id of BOOL) if (s[id] !== undefined) $(id).checked = s[id];
   const radio = document.querySelector(`input[name=mode][value="${s.mode}"]`);
   if (radio) radio.checked = true;
+  const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
+  if (ctRadio) ctRadio.checked = true;
   applyKeyStatus(s);
+}
+
+async function loadTesseractStatus() {
+  let data;
+  try {
+    data = await api("GET", "/api/tesseract");
+  } catch (e) {
+    return;
+  }
+  const info = $("tesseract-info");
+  if (!info) return;
+  info.hidden = false;
+  if (data.available) {
+    info.className = "key-info";
+    const langs = (data.languages || []).join(", ") || "eng";
+    info.innerHTML =
+      `<span class="glyph">✓</span><span>Tesseract installed &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
+  } else {
+    info.className = "key-info warn";
+    info.innerHTML =
+      `<span class="glyph">!</span><span>Tesseract not detected. Install it (Linux: <span class="mono">apt install tesseract-ocr</span>; macOS: <span class="mono">brew install tesseract</span>; Windows: UB-Mannheim installer) to use Mixed or Printed-only modes. Handwriting mode still works as usual.</span>`;
+  }
+  // Populate the language datalist with whatever's actually installed.
+  const dl = $("tesseract-langs");
+  if (dl) {
+    dl.innerHTML = "";
+    for (const code of data.languages || []) {
+      const opt = document.createElement("option");
+      opt.value = code;
+      dl.appendChild(opt);
+    }
+  }
 }
 
 async function saveSettings(partial) {
@@ -229,6 +265,7 @@ function wire() {
   for (const id of [...TEXT, ...NUMERIC]) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const id of BOOL) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const r of document.querySelectorAll("input[name=mode]")) r.addEventListener("change", () => saveSettings(gatherSettings()));
+  for (const r of document.querySelectorAll("input[name=content_type]")) r.addEventListener("change", () => saveSettings(gatherSettings()));
 
   const dz = $("dropzone");
   $("browse").onclick = () => $("file-input").click();
@@ -274,3 +311,4 @@ window.addEventListener("pagehide", (e) => { if (!e.persisted) bye(); });
 wire();
 loadSettings();
 loadModels();
+loadTesseractStatus();

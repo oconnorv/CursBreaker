@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5" />
+  <link rel="stylesheet" href="/static/styles.css?v=6" />
   <link rel="icon" type="image/x-icon" href="/static/favicon.png" />
 </head>
 <body>
@@ -44,7 +44,15 @@
           </label>
 
           <fieldset class="field">
-            <legend>Transcription mode</legend>
+            <legend>Content type</legend>
+            <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page.</label>
+            <label class="radio"><input type="radio" name="content_type" value="mixed" /> <b>Mixed</b> &mdash; Gemini classifies each line; printed regions go to Tesseract for real per-word boxes, handwriting to Gemini.</label>
+            <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract OCRs locally; no Gemini call.</label>
+          </fieldset>
+          <div id="tesseract-info" class="key-info" hidden></div>
+
+          <fieldset class="field">
+            <legend>Transcription mode <span class="muted">(handwriting flow)</span></legend>
             <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
             <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
           </fieldset>
@@ -74,6 +82,10 @@
               <label class="field"><span>PDF DPI</span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
               <label class="field"><span>Max image dimension (0 = original)</span><input type="number" id="max_dimension" step="256" min="0" /></label>
               <label class="field"><span>Word confidence (hOCR)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
+              <label class="field"><span>Tesseract language</span>
+                <input id="tesseract_language" list="tesseract-langs" placeholder="eng" />
+                <datalist id="tesseract-langs"></datalist>
+              </label>
             </div>
             <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
           </details>
@@ -121,7 +133,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=6"></script>
 
   <footer class="credits">
     Based on Mark Humphries' work at

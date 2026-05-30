@@ -82,6 +82,18 @@ def clear_api_key():
     return settings.public_dict()
 
 
+@app.get("/api/tesseract")
+def tesseract_status():
+    """Whether Tesseract is callable here, plus the installed languages."""
+    from . import tesseract_client
+
+    available = tesseract_client.is_available()
+    return {
+        "available": available,
+        "languages": tesseract_client.available_languages() if available else [],
+    }
+
+
 @app.get("/api/models")
 def list_models():
     settings = load_settings()

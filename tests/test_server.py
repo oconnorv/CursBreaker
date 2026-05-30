@@ -137,6 +137,31 @@ def test_favicon_route_never_500s():
     assert r.status_code in (200, 204)
 
 
+def test_tesseract_status_endpoint_reports_availability():
+    r = client.get("/api/tesseract")
+    assert r.status_code == 200
+    body = r.json()
+    assert "available" in body and isinstance(body["available"], bool)
+    assert "languages" in body and isinstance(body["languages"], list)
+
+
+def test_content_type_round_trips_through_settings_api():
+    r = client.post("/api/settings", json={"content_type": "mixed", "tesseract_language": "eng"}).json()
+    assert r["content_type"] == "mixed"
+    assert r["tesseract_language"] == "eng"
+
+
+def test_index_has_content_type_selector_and_tesseract_status():
+    html = client.get("/").text
+    # Three content-type radios are present.
+    assert 'name="content_type"' in html
+    for v in ("handwriting", "mixed", "text"):
+        assert f'value="{v}"' in html
+    # A visible status block + a place to pick a Tesseract language.
+    assert 'id="tesseract-info"' in html
+    assert 'id="tesseract_language"' in html
+
+
 def test_heartbeat_endpoint_updates_timestamp():
     from cursbreaker import server
     server._LAST_PING_AT = None
