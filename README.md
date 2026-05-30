@@ -119,13 +119,15 @@ sample output.
 | **Two-pass** (default) | One call for the most accurate transcription, a second for line boxes; the accurate text is aligned onto the boxes. | Best accuracy, ~2× API cost/time. |
 | **One-pass** | A single structured call returns text + line boxes together. | ~½ the cost and latency; transcription may be slightly less accurate. |
 
-### Accuracy settings (defaults follow the blog's recipe)
+### Accuracy settings (defaults)
 
-- **Model:** `gemini-3-pro-preview` (editable; the app also lists the models
+- **Model:** `gemini-3.1-pro-preview` (editable; the app also lists the models
   your key can actually use).
-- **Temperature:** `0`
-- **Thinking level:** `low` — extra reasoning was found to *hurt* handwriting
-  accuracy.
+- **Temperature:** `0.3`
+- **Thinking budget:** `128` tokens — Humphries' finding is that extra
+  reasoning *hurts* handwriting accuracy, so the default is deliberately
+  minimal. The Advanced panel also exposes a coarser "thinking level"
+  (`low` / `medium` / `high`); when that's set it overrides the budget.
 - **Media resolution:** `high`
 - **Preprocessing:** gentle orientation/denoise/brightness (toggleable).
 

@@ -20,7 +20,7 @@ async function api(method, url, body) {
 }
 
 // ---- settings ----------------------------------------------------------- //
-const NUMERIC = ["temperature", "pdf_dpi", "max_dimension", "word_confidence"];
+const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
 const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution", "tesseract_language"];
 const BOOL = ["use_mock", "preprocess"];
 

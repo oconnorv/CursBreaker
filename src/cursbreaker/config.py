@@ -24,13 +24,15 @@ class Settings(BaseModel):
     api_key: str = ""
     # Model names change often; these are sensible defaults but the UI lets the
     # user pick any model their key exposes (see /api/models).
-    transcription_model: str = "gemini-3-pro-preview"
-    detection_model: str = "gemini-3-pro-preview"
-    temperature: float = 0.0
-    # The reference blog found that *minimal* reasoning gives the best
-    # handwriting accuracy. On Gemini 3 this maps to a low "thinking level";
-    # older models use a token budget. We send whichever the SDK accepts.
-    thinking_level: str = "low"
+    transcription_model: str = "gemini-3.1-pro-preview"
+    detection_model: str = "gemini-3.1-pro-preview"
+    temperature: float = 0.3
+    # Two ways to constrain reasoning: a coarse "thinking level" string (used
+    # by some models) and a numeric token budget. When ``thinking_level`` is
+    # set we send that; an empty string falls through to ``thinking_budget``.
+    # Default ships with budget=128 active so the model spends minimal tokens
+    # on reasoning (Humphries' finding: more thinking hurts handwriting).
+    thinking_level: str = ""
     thinking_budget: int = 128
     media_resolution: str = "high"  # high | medium | low
     max_output_tokens: int = 8192

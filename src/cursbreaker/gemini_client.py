@@ -21,6 +21,7 @@ from .models import LabeledLineBox, LineBox
 # Shown in the UI as hints when a live model list is unavailable. The UI prefers
 # the live list from the user's key; model names change frequently.
 SUGGESTED_MODELS = [
+    "gemini-3.1-pro-preview",
     "gemini-3-pro-preview",
     "gemini-3-pro",
     "gemini-2.5-pro",
