@@ -26,6 +26,19 @@ class LineBox(BaseModel):
     box_2d: list[int]
 
 
+class LabeledLineBox(BaseModel):
+    """A line-box with a printed/handwritten label, used by mixed-content mode.
+
+    Same wire constraints as ``LineBox`` (no defaults). The ``kind`` field is
+    expected to be ``"printed"`` or ``"handwritten"``; anything else falls
+    through to handwriting in the pipeline so the page is never lost.
+    """
+
+    text: str
+    box_2d: list[int]
+    kind: str
+
+
 class PlacedLine(BaseModel):
     """A line text placed onto a normalized box, with provenance.
 
@@ -54,6 +67,14 @@ class PixelBox(BaseModel):
         return max(0, self.y1 - self.y0)
 
 
+class OcrWord(BaseModel):
+    """A word with a real (engine-provided) bounding box and confidence."""
+
+    text: str
+    box: PixelBox
+    confidence: int = 95
+
+
 class TranscribedLine(BaseModel):
     """One transcribed line placed on the page."""
 
@@ -62,6 +83,10 @@ class TranscribedLine(BaseModel):
     # Word-level confidence written into hOCR (x_wconf). A lower value flags
     # lines whose bounding box was interpolated rather than detected.
     confidence: int = 95
+    # When set, real engine-provided per-word data (text + boxes + per-word
+    # confidence). When None, the hOCR builder falls back to proportional
+    # word-box synthesis from ``box``. Tesseract populates this; Gemini does not.
+    words: list[OcrWord] | None = None
 
 
 class PageResult(BaseModel):

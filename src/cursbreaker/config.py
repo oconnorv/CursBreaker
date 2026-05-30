@@ -36,7 +36,16 @@ class Settings(BaseModel):
     max_output_tokens: int = 8192
 
     # --- Pipeline ---
-    mode: str = "two_pass"  # two_pass | one_pass
+    # Content type chooses which engine(s) run per page:
+    #   handwriting -> Gemini only (existing recipe).
+    #   text        -> Tesseract only; no API call.
+    #   mixed       -> Gemini classifies each line printed/handwritten, then
+    #                  printed lines go to Tesseract (real per-word boxes) and
+    #                  handwritten lines use Gemini transcription. Outputs are
+    #                  merged in our code -- Gemini never sees Tesseract's text.
+    content_type: str = "handwriting"  # handwriting | text | mixed
+    tesseract_language: str = "eng"  # any 3-letter code installed locally
+    mode: str = "two_pass"  # two_pass | one_pass (handwriting flow)
     pdf_dpi: int = 300
     max_dimension: int = 0  # 0 = keep original size; else resize longest side
     preprocess: bool = True

@@ -52,10 +52,15 @@ def build_searchable_pdf(
             )
             font = _register_overlay_font(pdf_page)
             for line in page.lines:
-                # Place per-word invisible text at each word's bounding box, so
-                # cursor selection matches word boundaries and search hits land
-                # on the right region of the page.
-                for word, wbox in split_line_into_words(line.text, line.box):
+                # Prefer real per-word data (e.g. Tesseract) when present, so
+                # cursor selection and search lands on the actual word boxes;
+                # otherwise fall back to splitting the line box proportionally
+                # (the only option for Gemini-sourced lines).
+                if line.words:
+                    word_items = [(w.text, w.box) for w in line.words]
+                else:
+                    word_items = list(split_line_into_words(line.text, line.box))
+                for word, wbox in word_items:
                     if wbox.x1 <= wbox.x0 or wbox.y1 <= wbox.y0:
                         continue
                     fontsize = max(1.0, (wbox.y1 - wbox.y0) * 0.7)

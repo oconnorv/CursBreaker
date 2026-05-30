@@ -166,16 +166,26 @@ def _build_page(body, page: PageResult, pi: int, *, language: str) -> None:
                 "title": f"{_bbox(line.box)}; baseline 0 -{descender}; lang {language}",
             },
         )
-        for wi, (word, wbox) in enumerate(
-            split_line_into_words(line.text, line.box), start=1
-        ):
+        # Prefer real per-word data (e.g. Tesseract) when the line carries it;
+        # otherwise fall back to proportionally splitting the line box, which
+        # is the only option for Gemini-sourced lines.
+        if line.words:
+            word_iter = [
+                (w.text, w.box, w.confidence) for w in line.words
+            ]
+        else:
+            word_iter = [
+                (text, wbox, line.confidence)
+                for text, wbox in split_line_into_words(line.text, line.box)
+            ]
+        for wi, (word_text, wbox, wconf) in enumerate(word_iter, start=1):
             w = _sub(
                 line_span,
                 "span",
                 **{
                     "class": "ocrx_word",
                     "id": f"word_{pi}_{li}_{wi}",
-                    "title": f"{_bbox(wbox)}; x_wconf {line.confidence}",
+                    "title": f"{_bbox(wbox)}; x_wconf {wconf}",
                 },
             )
-            w.text = word
+            w.text = word_text
