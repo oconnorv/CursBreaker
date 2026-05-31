@@ -195,6 +195,51 @@ def test_should_shutdown_predicate():
     assert _should_shutdown(50, 10, now=100, jobs_running=True) is False
 
 
+def _make_access_record(status: int) -> "logging.LogRecord":
+    import logging
+    return logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:12345", "GET", "/x", "1.1", status),
+        exc_info=None,
+    )
+
+
+def test_pretty_access_formatter_marks_status_classes():
+    from cursbreaker.server import PrettyAccessFormatter
+    fmt = PrettyAccessFormatter(use_colors=False)
+    assert " ok " in fmt.format(_make_access_record(200))
+    assert " ok " in fmt.format(_make_access_record(304))
+    assert "warn" in fmt.format(_make_access_record(404))
+    assert " err" in fmt.format(_make_access_record(500))
+    # The leading "INFO" prefix from the default formatter is gone.
+    assert "INFO" not in fmt.format(_make_access_record(200))
+
+
+def test_pretty_access_formatter_emits_ansi_when_colors_on():
+    from cursbreaker.server import PrettyAccessFormatter
+    out = PrettyAccessFormatter(use_colors=True).format(_make_access_record(200))
+    assert "\x1b[32m" in out and "\x1b[0m" in out  # green + reset
+
+    out = PrettyAccessFormatter(use_colors=True).format(_make_access_record(500))
+    assert "\x1b[31m" in out and "\x1b[0m" in out  # red + reset
+
+    # use_colors=False should leave the line free of escape codes.
+    out = PrettyAccessFormatter(use_colors=False).format(_make_access_record(200))
+    assert "\x1b[" not in out
+
+
+def test_pretty_access_formatter_falls_back_for_non_access_records():
+    import logging
+    from cursbreaker.server import PrettyAccessFormatter
+    record = logging.LogRecord(
+        name="uvicorn.error", level=logging.INFO, pathname="", lineno=0,
+        msg="some lifecycle message", args=None, exc_info=None,
+    )
+    out = PrettyAccessFormatter(use_colors=False).format(record)
+    assert "some lifecycle message" in out
+
+
 def test_access_log_filter_drops_heartbeat_keeps_others():
     import logging
 

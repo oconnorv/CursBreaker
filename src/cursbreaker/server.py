@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import os
 import signal
+import sys
 import tempfile
 import threading
 import time
@@ -384,6 +385,66 @@ def install_access_log_filter() -> None:
     logger = logging.getLogger("uvicorn.access")
     if not any(getattr(f, "_cursbreaker_heartbeat", False) for f in logger.filters):
         logger.addFilter(_HideHeartbeat())
+
+
+import logging as _logging
+
+
+class PrettyAccessFormatter(_logging.Formatter):
+    """Drop-in replacement for uvicorn's access-log formatter that styles each
+    line by HTTP status class, so successful requests don't visually read like
+    warnings:
+
+      * 2xx, 3xx -> green, prefixed with ``ok``
+      * 4xx       -> yellow, prefixed with ``warn``
+      * 5xx       -> red, prefixed with ``err``
+
+    Colors auto-detect a TTY; the standard ``NO_COLOR`` env var disables them.
+    Non-access log records (anything that isn't a 5-arg access tuple) fall
+    through to the default Formatter so we never break unrelated log lines.
+    """
+
+    _RESET = "\x1b[0m"
+    _GREEN = "\x1b[32m"
+    _YELLOW = "\x1b[33m"
+    _RED = "\x1b[31m"
+
+    def __init__(self, *, use_colors=None):
+        super().__init__()
+        if use_colors is None:
+            use_colors = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+        self.use_colors = bool(use_colors)
+
+    def format(self, record):  # noqa: A003 (logging API name)
+        args = record.args or ()
+        try:
+            client_addr, method, full_path, http_version, status_code = args
+            status = int(status_code)
+        except (ValueError, TypeError):
+            return super().format(record)
+
+        if 200 <= status < 400:
+            color, marker = self._GREEN, " ok "
+        elif 400 <= status < 500:
+            color, marker = self._YELLOW, "warn"
+        else:
+            color, marker = self._RED, " err"
+
+        try:
+            from http import HTTPStatus
+
+            phrase = HTTPStatus(status).phrase
+        except ValueError:
+            phrase = ""
+
+        line = (
+            f'{marker}     {client_addr} - '
+            f'"{method} {full_path} HTTP/{http_version}" '
+            f'{status} {phrase}'
+        ).rstrip()
+        if self.use_colors:
+            return f"{color}{line}{self._RESET}"
+        return line
 
 
 # --------------------------------------------------------------------------- #

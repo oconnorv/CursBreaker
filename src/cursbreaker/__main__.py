@@ -20,6 +20,7 @@ def main() -> None:
     args = parser.parse_args()
 
     import uvicorn
+    from copy import deepcopy
 
     from .server import install_access_log_filter, start_autoshutdown
 
@@ -32,8 +33,22 @@ def main() -> None:
 
     install_access_log_filter()
 
+    # Swap uvicorn's default access formatter for our PrettyAccessFormatter
+    # so successful requests show up as green "ok" lines instead of yellowish
+    # "INFO" lines that read like warnings.
+    log_config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["formatters"]["access"] = {
+        "()": "cursbreaker.server.PrettyAccessFormatter",
+    }
+
     print(f"CursBreaker running at {url}  (Ctrl+C to stop)")
-    uvicorn.run("cursbreaker.server:app", host=args.host, port=args.port, log_level="info")
+    uvicorn.run(
+        "cursbreaker.server:app",
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        log_config=log_config,
+    )
 
 
 if __name__ == "__main__":
