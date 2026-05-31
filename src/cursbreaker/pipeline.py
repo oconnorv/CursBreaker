@@ -88,7 +88,7 @@ def _process_page_handwriting(
 
 def _process_page_text_only(loaded, settings: Settings) -> PageResult:
     """Tesseract-only flow: no Gemini call, real per-word boxes throughout."""
-    tesseract_client.require_available()
+    tesseract_client.require_available(settings)
     w, h = loaded.sent_width, loaded.sent_height
     lines = tesseract_client.transcribe_page(
         loaded.image, lang=settings.tesseract_language
@@ -110,7 +110,7 @@ def _process_page_mixed(
     Tesseract on the cropped region (real per-word boxes), handwritten lines
     use Gemini's own transcription from the labeled detection. Outputs are
     merged in reading order. Gemini never sees Tesseract's text."""
-    tesseract_client.require_available()
+    tesseract_client.require_available(settings)
     png = loaded.to_png_bytes()
     labeled = provider.detect_lines_labeled(png)
 

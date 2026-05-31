@@ -85,13 +85,20 @@ def clear_api_key():
 
 @app.get("/api/tesseract")
 def tesseract_status():
-    """Whether Tesseract is callable here, plus the installed languages."""
+    """Detailed Tesseract status: which piece (if any) is missing and where we
+    looked, so the UI can offer a fix specific to the actual failure."""
     from . import tesseract_client
 
-    available = tesseract_client.is_available()
+    st = tesseract_client.status(load_settings(), force=True)
     return {
-        "available": available,
-        "languages": tesseract_client.available_languages() if available else [],
+        "available": st.installed,  # kept for back-compat with older clients
+        "languages": st.languages,
+        "wrapper_present": st.wrapper_present,
+        "binary_found": st.binary_found,
+        "cmd_path": st.cmd_path,
+        "version": st.version,
+        "error": st.error,
+        "install_hint": st.install_hint,
     }
 
 

@@ -103,9 +103,17 @@ def test_content_type_text_uses_tesseract_only(tmp_path):
 
 
 def test_content_type_text_errors_clearly_when_tesseract_missing(monkeypatch, tmp_path):
-    # Force is_available -> False so we hit the require_available guard
+    # Force status -> not installed so we hit the require_available guard
     # regardless of what's actually installed in the test env.
-    monkeypatch.setattr(tesseract_client, "is_available", lambda: False)
+    monkeypatch.setattr(
+        tesseract_client,
+        "status",
+        lambda settings=None: tesseract_client.TesseractStatus(
+            wrapper_present=True,
+            binary_found=False,
+            error="Tesseract OCR engine not found. Install it ...",
+        ),
+    )
     out = tmp_path / "out"
     page = _printed_page(tmp_path)
     settings = Settings(content_type="text")

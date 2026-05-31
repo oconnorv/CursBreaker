@@ -13,7 +13,7 @@ datas = [("../src/cursbreaker/static", "cursbreaker/static")]
 binaries = []
 hiddenimports = collect_submodules("uvicorn")
 
-for pkg in ("fastapi", "starlette", "google.genai", "pymupdf", "lxml"):
+for pkg in ("fastapi", "starlette", "google.genai", "pymupdf", "lxml", "pytesseract"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

@@ -88,12 +88,23 @@ async function loadTesseractStatus() {
   if (data.available) {
     info.className = "key-info";
     const langs = (data.languages || []).join(", ") || "eng";
+    const ver = data.version ? ` v${escapeHtml(data.version)}` : "";
     info.innerHTML =
-      `<span class="glyph">✓</span><span>Tesseract installed &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
+      `<span class="glyph">✓</span><span>Tesseract${ver} installed &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
   } else {
     info.className = "key-info warn";
+    let detail;
+    if (data.wrapper_present === false) {
+      detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+    } else {
+      const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
+      const looked = data.cmd_path
+        ? ` Looked for <span class="mono">${escapeHtml(data.cmd_path)}</span>.`
+        : "";
+      detail = `Tesseract OCR engine not detected. ${hint}${looked} If it is installed but not on PATH, set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+    }
     info.innerHTML =
-      `<span class="glyph">!</span><span>Tesseract not detected. Install it (Linux: <span class="mono">apt install tesseract-ocr</span>; macOS: <span class="mono">brew install tesseract</span>; Windows: UB-Mannheim installer) to use Mixed or Printed-only modes. Handwriting mode still works as usual.</span>`;
+      `<span class="glyph">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
   }
   // Populate the language datalist with whatever's actually installed.
   const dl = $("tesseract-langs");

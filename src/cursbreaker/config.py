@@ -47,6 +47,10 @@ class Settings(BaseModel):
     #                  merged in our code -- Gemini never sees Tesseract's text.
     content_type: str = "handwriting"  # handwriting | text | mixed
     tesseract_language: str = "eng"  # any 3-letter code installed locally
+    # Optional explicit path to the tesseract binary. "" = auto-detect (bundled
+    # binary, well-known locations, then PATH). Overridable by the TESSERACT_CMD
+    # environment variable, the same way the API key can come from the env.
+    tesseract_cmd: str = ""
     mode: str = "two_pass"  # two_pass | one_pass (handwriting flow)
     pdf_dpi: int = 300
     max_dimension: int = 0  # 0 = keep original size; else resize longest side
@@ -74,6 +78,12 @@ class Settings(BaseModel):
             data["api_key_source"] = "config"
         else:
             data["api_key_source"] = None
+        if os.environ.get("TESSERACT_CMD"):
+            data["tesseract_cmd_source"] = "env"
+        elif self.tesseract_cmd:
+            data["tesseract_cmd_source"] = "config"
+        else:
+            data["tesseract_cmd_source"] = None
         return data
 
     def resolved_api_key(self) -> str:
@@ -82,6 +92,10 @@ class Settings(BaseModel):
             or os.environ.get("GOOGLE_API_KEY")
             or self.api_key
         )
+
+    def resolved_tesseract_cmd(self) -> str:
+        """Path to the tesseract binary: env override first, then the setting."""
+        return os.environ.get("TESSERACT_CMD") or self.tesseract_cmd
 
 
 def config_path() -> Path:

@@ -143,6 +143,12 @@ def test_tesseract_status_endpoint_reports_availability():
     body = r.json()
     assert "available" in body and isinstance(body["available"], bool)
     assert "languages" in body and isinstance(body["languages"], list)
+    # Richer diagnostics so the UI can explain *which* piece is missing.
+    for key in ("wrapper_present", "binary_found", "cmd_path", "version",
+                "error", "install_hint"):
+        assert key in body
+    assert isinstance(body["wrapper_present"], bool)
+    assert isinstance(body["binary_found"], bool)
 
 
 def test_content_type_round_trips_through_settings_api():
