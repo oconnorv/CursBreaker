@@ -287,3 +287,19 @@ def test_transcribed_line_words_field_is_optional():
     # Existing call sites that don't pass `words` must keep working.
     line = TranscribedLine(text="hi", box=PixelBox(x0=0, y0=0, x1=10, y1=10))
     assert line.words is None
+
+
+def test_spec_bundles_engine_under_cursbreaker_app_root():
+    """The PyInstaller spec must copy the Tesseract engine + tessdata UNDER
+    ``cursbreaker/`` so the frozen resolver (``_app_root()`` ==
+    ``sys._MEIPASS/cursbreaker``) can find them. Guards against regressing to a
+    top-level ``tesseract``/``tessdata`` dest, which ships the engine but leaves
+    it undetectable (a real bug caught in review)."""
+    from pathlib import Path
+
+    spec = (Path(__file__).resolve().parents[1] / "packaging" / "cursbreaker.spec").read_text()
+    assert '"cursbreaker/tesseract"' in spec          # binary + DLLs
+    assert '"cursbreaker/tesseract/tessdata"' in spec  # language data beside it
+    # The top-level destinations the resolver can't see must NOT appear.
+    assert ', "tesseract")' not in spec
+    assert ', "tessdata")' not in spec

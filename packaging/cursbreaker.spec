@@ -69,21 +69,27 @@ if sys.platform.startswith("win"):
             file=sys.stderr,
         )
     else:
-        # The engine binary + every DLL beside it, placed under ``tesseract/``
-        # exactly where the runtime resolver looks first.
-        binaries.append((str(tess_dir / "tesseract.exe"), "tesseract"))
+        # The engine binary + every DLL beside it. Destinations MUST sit under
+        # ``cursbreaker/`` because the frozen resolver's _app_root() is
+        # ``sys._MEIPASS/cursbreaker`` -- it probes
+        # ``cursbreaker/tesseract/tesseract.exe`` (mirrors the ``cursbreaker/
+        # static`` datas entry above). Top-level ``tesseract/`` would ship the
+        # engine but leave it undetectable.
+        binaries.append((str(tess_dir / "tesseract.exe"), "cursbreaker/tesseract"))
         for dll in tess_dir.glob("*.dll"):
-            binaries.append((str(dll), "tesseract"))
+            binaries.append((str(dll), "cursbreaker/tesseract"))
             upx_exclude.append(dll.name)
         upx_exclude.append("tesseract.exe")
 
-        # Selected language packs -> ``tessdata/`` (TESSDATA_PREFIX target).
+        # Language packs go beside the binary at cursbreaker/tesseract/tessdata,
+        # which _candidate_tessdata() checks first (Path(cmd).parent/"tessdata")
+        # and points TESSDATA_PREFIX at.
         src_tessdata = tess_dir / "tessdata"
         shipped = []
         for lang in BUNDLE_LANGS:
             tf = src_tessdata / f"{lang}.traineddata"
             if tf.is_file():
-                datas.append((str(tf), "tessdata"))
+                datas.append((str(tf), "cursbreaker/tesseract/tessdata"))
                 shipped.append(lang)
         if not shipped:
             print(
