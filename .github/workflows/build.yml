@@ -1,12 +1,23 @@
 name: build
 
 on:
+  pull_request:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
+# If new commits land on the same PR/branch, cancel the older in-progress run
+# instead of letting duplicate CI runs pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   binaries:
+    # Heavy cross-platform packaging build: run on release tags or a manual
+    # dispatch, not on every PR push. Use the Actions "Run workflow" button to
+    # build/validate the bundle (incl. the Windows engine) on demand.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -43,10 +54,18 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Tesseract engine
-        # The engine binary lets the Printed/Mixed-mode tests run instead of
-        # skipping; without it the OCR-dependent cases are silently skipped.
+        # The engine binary lets the Printed-mode and word-box-refinement tests
+        # run instead of skipping; without it the OCR-dependent cases skip.
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
-      - run: |
+      - name: Install
+        run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-          pytest -q
+      - name: Smoke-check imports
+        # Catch dependency/packaging breakage (e.g. a missing native wheel)
+        # before it reaches users: the *real* Gemini path must import, not just
+        # the mock-driven tests. This is the failure class the test suite misses
+        # because it never imports the live SDK.
+        run: python -c "import cursbreaker; from google import genai; print('imports OK')"
+      - name: Run tests
+        run: pytest -q
