@@ -1,9 +1,28 @@
 # Bundling the Tesseract engine with CursBreaker
 
-> Status: **exploration**. This document lays out the options and a recommended
-> path. The runtime *plumbing* needed to support a bundled engine already exists
-> (see "How detection already supports a bundle" below); shipping the binary is a
-> packaging task, not an app-code change. Windows is the priority platform.
+> Status: **Phase 1 implemented (Windows)**. The Windows build now bundles the
+> engine, and the resolver auto-detects a bundled engine, a portable build in an
+> app-managed folder, and per-user installs — all without administrator rights.
+> macOS/Linux bundling (Phase 2) and a possible in-app downloader remain future
+> work. Windows is the priority platform.
+
+## No-admin options (important)
+
+Some users cannot run installers or write to `C:\Program Files`. Phase 1 gives
+them two admin-free paths, both discovered automatically by the resolver:
+
+1. **Bundled engine** — the Windows `.exe` ships Tesseract inside it; nothing to
+   install. This is the default for users who download a release build.
+2. **Portable drop-in** — a user can unzip a portable Tesseract into the
+   app-managed folder (`platformdirs.user_data_dir("CursBreaker")/tesseract`,
+   i.e. `%LOCALAPPDATA%\CursBreaker\tesseract` on Windows) — the binary plus a
+   `tessdata/` subfolder — and CursBreaker finds it on next launch.
+
+The resolver also probes the per-user install location (`%LOCALAPPDATA%\Programs\
+Tesseract-OCR`, where winget and non-admin UB-Mannheim installs land) before the
+machine-wide `C:\Program Files` locations. Installing Tesseract is therefore
+entirely **optional**: handwriting mode never needs it, and when a bundled build
+is used, printed/mixed modes work out of the box.
 
 ## Goal & current state
 
@@ -24,19 +43,24 @@ non-technical user downloads one artifact and Printed/Mixed modes "just work."
 ## How detection already supports a bundle
 
 `src/cursbreaker/tesseract_client.py` resolves the binary in this order
-(`resolve_tesseract`):
+(`resolve_tesseract`), no-admin options first:
 
 1. Explicit override — `TESSERACT_CMD` env var or the `tesseract_cmd` setting.
 2. **Bundled binary** — `_app_root()/tesseract/tesseract(.exe)`, where
    `_app_root()` is `sys._MEIPASS/cursbreaker` in a PyInstaller build.
-3. Well-known per-OS locations (e.g. `C:\Program Files\Tesseract-OCR`).
-4. Pytesseract's own PATH lookup (the universal fallback).
+3. **Portable drop-in** — `_managed_dir()/tesseract(.exe)` (the app-managed
+   `user_data_dir`), so a user can add an engine without an installer.
+4. Per-user install — `%LOCALAPPDATA%\Programs\Tesseract-OCR` on Windows.
+5. Machine-wide locations (e.g. `C:\Program Files\Tesseract-OCR`).
+6. Pytesseract's own PATH lookup (the universal fallback).
 
-It also sets `TESSDATA_PREFIX` to `_app_root()/tessdata` (or a `tessdata/` dir
-next to the binary) when that directory exists. **Consequence:** if the build
-drops `tesseract(.exe)` under `tesseract/` and the language data under
-`tessdata/`, step 2 finds it with **no code change**. Everything below is about
-getting those files into the bundle correctly per OS.
+It also sets `TESSDATA_PREFIX` to the first existing `tessdata` directory among:
+beside the binary, `_app_root()/tessdata`, and `_managed_dir()/tessdata`.
+Tesseract 5.x requires this to point **directly at** the `tessdata` folder (the
+parent-directory form errors out). **Consequence:** dropping `tesseract(.exe)`
+under `tesseract/` and language data under `tessdata/` is picked up with **no
+code change**. The status badge reports *how* the engine was found (bundled /
+portable / system / PATH) via the `source` field.
 
 ## Approaches
 
@@ -143,13 +167,19 @@ the artifact) to satisfy the Apache attribution requirement.
 - **Phase 0 (done):** `pytesseract` is a dependency; the resolver searches
   bundled → well-known → PATH; diagnostics name the actual gap. No binary
   bundled yet.
-- **Phase 1 — Windows only:** add a Windows `binaries`/`datas` block to the spec
-  and a `choco install tesseract` step to the Windows CI job. Validate with a
-  real CI run and a clean Windows VM (no separate Tesseract install).
+- **Phase 1 — Windows (done):** the spec copies the engine binary, its DLLs and
+  selected language packs (`eng, osd, fra, deu, spa, lat`) from the build
+  machine's install into the bundle (`tesseract/` + `tessdata/`), with
+  `upx_exclude` so UPX can't corrupt the DLLs; the Windows CI job runs
+  `choco install tesseract` first. The resolver adds no-admin discovery (bundled
+  engine, portable drop-in folder, per-user `%LOCALAPPDATA%` install).
+  *Remaining validation:* a real CI run and a smoke test on a clean Windows VM
+  with no separate Tesseract install.
 - **Phase 2 — macOS & Linux:** repeat with `brew`/`apt` plus `otool`/`ldd`
-  library gathering.
-- **Phase 3 — evaluate alternatives:** if native bundling is too fragile on a
-  platform, reconsider approach C (pure-pip OCR) behind an engine abstraction.
+  library gathering (the spec's Tesseract block is currently gated to Windows).
+- **Phase 3 — evaluate alternatives:** an in-app portable-engine downloader
+  (no-admin, fetches into the managed folder), and/or approach C (pure-pip OCR)
+  behind an engine abstraction if native bundling proves fragile.
 
 Every phase lands the engine in the same place the resolver already checks
 (`_app_root()/tesseract`), so none of them require touching the transcription

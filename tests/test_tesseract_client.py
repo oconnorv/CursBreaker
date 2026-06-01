@@ -153,6 +153,63 @@ def test_candidate_binaries_cover_each_os():
     assert "/usr/bin/tesseract" in tesseract_client._candidate_binaries("linux")
 
 
+def test_candidate_binaries_prefer_noadmin_locations_first():
+    # The bundled engine and the user-managed (portable) folder must come before
+    # any install location -- they need no administrator rights.
+    cands = tesseract_client._candidate_binaries("linux")
+    managed = str(tesseract_client._managed_dir() / "tesseract")
+    assert cands[0].endswith("tesseract")  # app bundle
+    assert cands[1] == managed             # portable drop-in folder
+    assert cands.index(managed) < cands.index("/usr/bin/tesseract")
+
+
+def test_candidate_binaries_include_per_user_windows_location(monkeypatch):
+    # A per-user (winget / non-admin) install lives under %LOCALAPPDATA% and
+    # must be probed before the machine-wide Program Files locations.
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+    cands = tesseract_client._candidate_binaries("win32")
+    # Separator-insensitive: pathlib emits '\' on real Windows but '/' when this
+    # path is constructed on a POSIX test host, so normalize before comparing.
+    norm = [c.replace("\\", "/") for c in cands]
+    per_user = "C:/Users/me/AppData/Local/Programs/Tesseract-OCR/tesseract.exe"
+    machine = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+    assert per_user in norm
+    assert norm.index(per_user) < norm.index(machine)
+
+
+def test_resolve_prefers_managed_portable_build(monkeypatch):
+    # With no install present, a portable build in the managed folder wins and
+    # is reported with source="managed".
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    managed_exe = str(tesseract_client._managed_dir() / "tesseract")
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: p == managed_exe)
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.cmd_path == managed_exe
+    assert st.source == "managed"
+    assert fake.pytesseract.tesseract_cmd == managed_exe
+
+
+def test_status_reports_source_and_managed_dir(monkeypatch):
+    # source classification + the drop-in folder are surfaced for the UI.
+    _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: False)
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.source == "path"  # fell through to PATH ("tesseract")
+    assert st.managed_dir and st.managed_dir.endswith("tesseract")
+
+
+def test_binary_missing_error_mentions_noadmin_dropin(monkeypatch):
+    # The actionable error must tell a non-admin user where to drop a portable
+    # build, not only how to run an installer.
+    _install_fake_pytesseract(monkeypatch, version_error=RuntimeError("nope"))
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.error
+    assert "admin" in st.error.lower()
+    assert st.managed_dir in st.error
+
+
 def test_resolve_uses_windows_well_known_path(monkeypatch):
     # Prove the Windows branch is selected even though the test host is Linux.
     fake = _install_fake_pytesseract(monkeypatch)

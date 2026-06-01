@@ -17,6 +17,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install Tesseract engine (Windows, for bundling)
+        # Phase 1: the Windows artifact ships the engine inside the .exe so end
+        # users need no separate, admin-requiring install. The spec copies the
+        # engine from this install into the bundle; on a runner without it the
+        # build still succeeds but ships no engine.
+        if: runner.os == 'Windows'
+        run: choco install --no-progress -y tesseract
       - name: Install
         run: |
           python -m pip install --upgrade pip

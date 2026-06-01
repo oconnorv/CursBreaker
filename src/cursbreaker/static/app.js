@@ -89,8 +89,13 @@ async function loadTesseractStatus() {
     info.className = "key-info";
     const langs = (data.languages || []).join(", ") || "eng";
     const ver = data.version ? ` v${escapeHtml(data.version)}` : "";
+    const SOURCE_NOTE = {
+      bundled: " (bundled with CursBreaker)",
+      managed: " (portable build in your CursBreaker folder)",
+    };
+    const src = SOURCE_NOTE[data.source] || "";
     info.innerHTML =
-      `<span class="glyph">✓</span><span>Tesseract${ver} installed &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
+      `<span class="glyph">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
   } else {
     info.className = "key-info warn";
     let detail;
@@ -98,10 +103,11 @@ async function loadTesseractStatus() {
       detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
     } else {
       const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
-      const looked = data.cmd_path
-        ? ` Looked for <span class="mono">${escapeHtml(data.cmd_path)}</span>.`
+      // No-admin path: a portable build dropped into the app-managed folder.
+      const portable = data.managed_dir
+        ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
         : "";
-      detail = `Tesseract OCR engine not detected. ${hint}${looked} If it is installed but not on PATH, set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+      detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
     }
     info.innerHTML =
       `<span class="glyph">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;

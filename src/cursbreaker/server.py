@@ -96,9 +96,11 @@ def tesseract_status():
         "wrapper_present": st.wrapper_present,
         "binary_found": st.binary_found,
         "cmd_path": st.cmd_path,
+        "source": st.source,
         "version": st.version,
         "error": st.error,
         "install_hint": st.install_hint,
+        "managed_dir": st.managed_dir,
     }
 
 

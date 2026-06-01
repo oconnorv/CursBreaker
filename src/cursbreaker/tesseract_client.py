@@ -54,6 +54,18 @@ def _app_root() -> Path:
     return Path(__file__).parent
 
 
+def _managed_dir() -> Path:
+    """App-managed folder a user can drop a *portable* Tesseract into.
+
+    This is the no-admin escape hatch: a user who cannot run installers can
+    unzip a portable Tesseract here (binary + a ``tessdata`` subfolder) and
+    CursBreaker will find it. We only ever *read* from this folder in Phase 1.
+    """
+    from platformdirs import user_data_dir
+
+    return Path(user_data_dir("CursBreaker", appauthor=False)) / "tesseract"
+
+
 def _is_file(path: str) -> bool:
     """Indirection point so tests can simulate which candidate paths exist."""
     return os.path.isfile(path)
@@ -62,16 +74,31 @@ def _is_file(path: str) -> bool:
 def _candidate_binaries(platform: Optional[str] = None) -> list[str]:
     """Likely tesseract locations to probe before falling back to PATH.
 
-    Ordered: a binary bundled next to the app first, then the well-known per-OS
-    install locations. ``platform`` defaults to ``sys.platform`` but is a
-    parameter so every OS branch is unit-testable from any host. PATH itself is
-    intentionally absent here -- pytesseract handles that universal fallback.
+    Ordered so the no-admin options win first: a binary bundled inside the app,
+    then a portable build the user dropped in the managed folder, then per-user
+    installs, then machine-wide installs. ``platform`` defaults to
+    ``sys.platform`` but is a parameter so every OS branch is unit-testable from
+    any host. PATH itself is intentionally absent here -- pytesseract handles
+    that universal fallback.
     """
     plat = platform or sys.platform
     is_windows = plat.startswith("win")
     exe = "tesseract.exe" if is_windows else "tesseract"
-    cands = [str(_app_root() / "tesseract" / exe)]
+    # (1) shipped inside the app bundle and (2) a portable build in the
+    # app-managed folder -- both usable with no administrator rights.
+    cands = [
+        str(_app_root() / "tesseract" / exe),
+        str(_managed_dir() / exe),
+    ]
     if is_windows:
+        # Per-user installs (winget, or a non-admin UB-Mannheim install) land
+        # under %LOCALAPPDATA% and need no administrator.
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            cands.append(
+                str(Path(local) / "Programs" / "Tesseract-OCR" / "tesseract.exe")
+            )
+        # Machine-wide installs (admin to create, but free to read afterwards).
         cands += [
             r"C:\Program Files\Tesseract-OCR\tesseract.exe",
             r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
@@ -84,19 +111,43 @@ def _candidate_binaries(platform: Optional[str] = None) -> list[str]:
 
 
 def _candidate_tessdata(cmd: Optional[str]) -> Optional[str]:
-    """Return a ``tessdata`` dir to advertise via ``TESSDATA_PREFIX``, if any.
+    """Return the ``tessdata`` directory to advertise via ``TESSDATA_PREFIX``.
 
-    Only relevant for a *bundled* engine: a system install already knows where
-    its language data lives, so we leave ``TESSDATA_PREFIX`` untouched for it.
+    Tesseract 5.x wants this pointed straight at the ``tessdata`` folder (not
+    its parent). We only ever return a directory that exists, so a system
+    install -- whose data lives elsewhere and is located by the engine itself
+    -- is correctly left untouched.
     """
-    bundled = _app_root() / "tessdata"
-    if bundled.is_dir():
-        return str(bundled)
+    dirs: list[Path] = []
     if cmd:
-        beside = Path(cmd).parent / "tessdata"
-        if beside.is_dir():
-            return str(beside)
+        dirs.append(Path(cmd).parent / "tessdata")  # travels with the binary
+    dirs.append(_app_root() / "tessdata")
+    dirs.append(_managed_dir() / "tessdata")
+    for d in dirs:
+        if d.is_dir():
+            return str(d)
     return None
+
+
+def _classify_source(cmd: Optional[str], override: str) -> Optional[str]:
+    """Label *how* the binary was found, for an informative status badge.
+
+    One of: ``override`` (explicit setting/env), ``bundled`` (shipped in the
+    app), ``managed`` (portable build in the app folder), ``path`` (found on
+    PATH), or ``system`` (a well-known install location).
+    """
+    if not cmd:
+        return None
+    if override and cmd == override:
+        return "override"
+    if cmd == "tesseract":
+        return "path"
+    parent = os.path.dirname(cmd)
+    if parent == str(_app_root() / "tesseract"):
+        return "bundled"
+    if parent == str(_managed_dir()):
+        return "managed"
+    return "system"
 
 
 def _install_hint(platform: Optional[str] = None) -> str:
@@ -112,13 +163,21 @@ def _install_hint(platform: Optional[str] = None) -> str:
     return "Install it with: sudo apt install tesseract-ocr"
 
 
+def _override_cmd(settings=None) -> str:
+    """The explicit binary path from the setting or ``TESSERACT_CMD`` env."""
+    if settings is not None:
+        return settings.resolved_tesseract_cmd()
+    return os.environ.get("TESSERACT_CMD", "")
+
+
 def resolve_tesseract(settings=None) -> Optional[str]:
     """Point pytesseract at the right binary + tessdata; return the command.
 
     Resolution order: (1) an explicit override from ``TESSERACT_CMD`` / the
     saved ``tesseract_cmd`` setting -- honored even if the file is missing so a
-    later error can name the bad path; (2) a binary bundled with the app;
-    (3) well-known per-OS locations; (4) pytesseract's own PATH lookup, the
+    later error can name the bad path; (2) a binary bundled with the app or
+    dropped into the app-managed folder (both no-admin); (3) per-user then
+    machine-wide install locations; (4) pytesseract's own PATH lookup, the
     universal fallback that works wherever ``tesseract`` is on PATH. Returns the
     resolved command, or ``None`` if the pytesseract wrapper itself is absent.
     """
@@ -127,10 +186,7 @@ def resolve_tesseract(settings=None) -> Optional[str]:
     except ImportError:
         return None
 
-    if settings is not None:
-        override = settings.resolved_tesseract_cmd()
-    else:
-        override = os.environ.get("TESSERACT_CMD", "")
+    override = _override_cmd(settings)
 
     cmd: Optional[str] = None
     if override:
@@ -164,10 +220,13 @@ class TesseractStatus:
     wrapper_present: bool = False  # ``import pytesseract`` succeeded
     binary_found: bool = False     # the engine answered a version probe
     cmd_path: Optional[str] = None  # the command we point pytesseract at
+    source: Optional[str] = None   # how it was found: bundled/managed/system/path/override
     version: Optional[str] = None
     languages: list[str] = field(default_factory=list)
     error: Optional[str] = None
     install_hint: str = ""
+    # Where a user without admin rights can drop a portable Tesseract build.
+    managed_dir: str = ""
 
 
 _PROBE_CACHE: dict[Optional[str], TesseractStatus] = {}
@@ -185,7 +244,12 @@ def status(settings=None, *, force: bool = False) -> TesseractStatus:
     if not force and cmd in _PROBE_CACHE:
         return _PROBE_CACHE[cmd]
 
-    st = TesseractStatus(cmd_path=cmd, install_hint=_install_hint())
+    st = TesseractStatus(
+        cmd_path=cmd,
+        source=_classify_source(cmd, _override_cmd(settings)),
+        install_hint=_install_hint(),
+        managed_dir=str(_managed_dir()),
+    )
     try:
         import pytesseract
     except ImportError:
@@ -204,9 +268,10 @@ def status(settings=None, *, force: bool = False) -> TesseractStatus:
         where = f" (looked for '{cmd}')" if cmd else ""
         st.error = (
             f"Tesseract OCR engine not found{where}. {st.install_hint} "
-            "If it is installed but not detected, set the TESSERACT_CMD "
-            "environment variable to the full path of the tesseract "
-            "executable and restart."
+            "No admin rights? Unzip a portable Tesseract into "
+            f"'{st.managed_dir}' (a folder with the tesseract executable and a "
+            "'tessdata' subfolder), or set the TESSERACT_CMD environment "
+            "variable to the full path of the executable, then restart."
         )
         _PROBE_CACHE[cmd] = st
         return st
