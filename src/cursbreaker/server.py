@@ -105,6 +105,17 @@ def tesseract_status():
     }
 
 
+@app.get("/api/key-status")
+def key_status():
+    """Cheap, generation-free check that the stored Gemini key still works, so a
+    revoked/expired key surfaces in Settings before a transcription fails. Uses
+    the free ListModels endpoint (no token/quota cost)."""
+    from .gemini_client import check_api_key
+
+    st = check_api_key(load_settings())
+    return {"state": st.state, "message": st.message}
+
+
 @app.get("/api/models")
 def list_models():
     settings = load_settings()

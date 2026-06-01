@@ -13,6 +13,7 @@ handwriting accuracy).
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Protocol
 
 from .config import Settings
@@ -84,6 +85,77 @@ def make_provider(settings: Settings) -> TranscriptionProvider:
     if settings.use_mock:
         return MockProvider()
     return GeminiProvider(settings)
+
+
+@dataclass
+class KeyStatus:
+    """Result of a cheap, generation-free check that an API key still works."""
+
+    state: str          # valid | invalid | unknown | no_key | mock
+    message: str = ""
+
+
+# Substrings that mark a genuine authentication failure (bad/revoked/expired
+# key) in a Gemini error, independent of SDK version.
+_AUTH_MARKERS = (
+    "API_KEY_INVALID", "API KEY NOT VALID", "API KEY EXPIRED",
+    "PERMISSION_DENIED", "UNAUTHENTICATED", "UNAUTHORIZED",
+    "INVALID AUTHENTICATION",
+)
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """True only when an exception clearly means a bad/revoked key.
+
+    Deliberately conservative: a transient network error, a 5xx, or a 429
+    rate-limit must NOT be classified as 'invalid', or we would tell a user
+    their good key is dead."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in (401, 403):
+        return True
+    blob = f"{getattr(exc, 'message', '')} {exc}".upper()
+    return any(m in blob for m in _AUTH_MARKERS)
+
+
+def _probe_models(key: str) -> None:
+    """One ListModels request to verify a key. Free -- it returns metadata only,
+    spending no generation tokens or quota. Returns on success; raises on
+    failure. Isolated so tests can stub it without the SDK or a network."""
+    from google import genai
+
+    client = genai.Client(api_key=key)
+    for _ in client.models.list():
+        return  # a single item proves the key authenticated
+    return       # an empty list still means auth succeeded
+
+
+def check_api_key(settings: Settings) -> KeyStatus:
+    """Verify a stored key is still active *without* spending generation quota.
+
+    Uses the free ListModels endpoint so a revoked/expired/mistyped key is
+    caught here -- in Settings -- instead of mid-transcription. A genuine auth
+    failure is reported as ``invalid``; anything ambiguous (offline, timeout,
+    5xx, rate-limit) is ``unknown`` so a good key is never called dead."""
+    if settings.use_mock:
+        return KeyStatus("mock", "Demo mode is on -- no real API call is made.")
+    key = settings.resolved_api_key()
+    if not key:
+        return KeyStatus("no_key", "No API key is stored.")
+    try:
+        _probe_models(key)
+        return KeyStatus("valid", "Key verified -- it's active.")
+    except Exception as exc:  # noqa: BLE001 -- classify, never propagate
+        if _is_auth_error(exc):
+            return KeyStatus(
+                "invalid",
+                "This key was rejected -- it may have been revoked, expired, or "
+                "mistyped. Paste a current key.",
+            )
+        return KeyStatus(
+            "unknown",
+            "Couldn't verify the key right now (a network or service issue); "
+            "it may still be fine.",
+        )
 
 
 class GeminiProvider:

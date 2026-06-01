@@ -64,6 +64,26 @@ function applyKeyStatus(data) {
   }
 }
 
+// Free, proactive check that a stored key still works. ListModels costs no
+// generation tokens/quota, so a revoked/expired key is caught here in Settings
+// instead of failing mid-transcription. Only "valid"/"invalid" change the
+// badge; "unknown" (offline/transient) and "no_key"/"mock" leave it untouched.
+async function verifyKey() {
+  let data;
+  try { data = await api("GET", "/api/key-status"); }
+  catch (e) { return; } // our own server unreachable — leave the local badge
+  const badge = $("key-status");
+  const info = $("key-info");
+  if (data.state === "valid") {
+    badge.textContent = "Key valid"; badge.className = "badge ok";
+  } else if (data.state === "invalid") {
+    badge.textContent = "Key rejected"; badge.className = "badge warn";
+    info.className = "key-info warn";
+    info.innerHTML =
+      `<span class="glyph">!</span><span>${escapeHtml(data.message)} Transcription will fail until you paste a current key.</span>`;
+  }
+}
+
 async function loadSettings() {
   const s = await api("GET", "/api/settings");
   for (const id of [...TEXT, ...NUMERIC]) if (s[id] !== undefined) $(id).value = s[id];
@@ -73,6 +93,7 @@ async function loadSettings() {
   const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
   if (ctRadio) ctRadio.checked = true;
   applyKeyStatus(s);
+  verifyKey(); // background-verify the stored key (no-op when none/mock)
 }
 
 async function loadTesseractStatus() {
@@ -287,6 +308,7 @@ function wire() {
     // A freshly-saved key invalidates any prior "no API key" transcription
     // error, so clear that stale message immediately.
     $("action-note").textContent = stagedStatus();
+    verifyKey(); // confirm the just-pasted key actually works (free check)
   });
   $("clear-key").onclick = async () => {
     if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;

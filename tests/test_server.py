@@ -308,3 +308,29 @@ def test_access_log_filter_drops_heartbeat_keeps_others():
         if getattr(f, "_cursbreaker_heartbeat", False)
     )
     assert before == after == 1
+
+
+def test_key_status_no_key_by_default():
+    # Fresh isolated config + cleared env -> nothing stored.
+    assert client.get("/api/key-status").json()["state"] == "no_key"
+
+
+def test_key_status_mock_when_demo_mode():
+    client.post("/api/settings", json={"use_mock": True})
+    assert client.get("/api/key-status").json()["state"] == "mock"
+
+
+def test_key_status_reports_invalid_revoked_key(monkeypatch):
+    from cursbreaker import gemini_client
+
+    monkeypatch.setenv("GEMINI_API_KEY", "revoked-key")
+
+    def boom(key):
+        e = Exception("400 API key not valid. Please pass a valid API key.")
+        e.code = 400
+        raise e
+
+    monkeypatch.setattr(gemini_client, "_probe_models", boom)
+    r = client.get("/api/key-status").json()
+    assert r["state"] == "invalid"
+    assert r["message"]
