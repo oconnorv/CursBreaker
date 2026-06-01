@@ -45,8 +45,7 @@
 
           <fieldset class="field">
             <legend>Content type</legend>
-            <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page.</label>
-            <label class="radio"><input type="radio" name="content_type" value="mixed" /> <b>Mixed</b> &mdash; Gemini classifies each line; printed regions go to Tesseract for real per-word boxes, handwriting to Gemini.</label>
+            <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page (printed text included).</label>
             <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract OCRs locally; no Gemini call.</label>
           </fieldset>
           <div id="tesseract-info" class="key-info" hidden></div>
@@ -55,6 +54,7 @@
             <legend>Transcription mode <span class="muted">(handwriting flow)</span></legend>
             <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
             <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
+            <label class="radio"><input type="checkbox" id="refine_word_boxes" /> <b>Refine word positions with Tesseract</b> &mdash; keeps Gemini's transcription as the text; uses Tesseract only to place words more precisely where they agree. Needs Tesseract; improves word location, never the wording.</label>
           </fieldset>
 
           <div class="grid2">

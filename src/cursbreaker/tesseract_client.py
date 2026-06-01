@@ -285,9 +285,12 @@ def status(settings=None, *, force: bool = False) -> TesseractStatus:
     return st
 
 
-def is_available() -> bool:
-    """Return True iff the wrapper is importable AND the binary responds."""
-    return status().installed
+def is_available(settings=None) -> bool:
+    """Return True iff the wrapper is importable AND the binary responds.
+
+    Pass ``settings`` so a configured ``tesseract_cmd`` is honored, not just the
+    environment override."""
+    return status(settings).installed
 
 
 def available_languages() -> list[str]:
@@ -316,7 +319,7 @@ def transcribe_region(
 
     ``offset`` is added to every returned coordinate so the caller can pass a
     crop of the page and still receive boxes in the original page's coordinate
-    space — that is what the mixed-content pipeline does for printed lines.
+    space — that is how word-box refinement maps a cropped line back to the page.
     """
     import pytesseract
 

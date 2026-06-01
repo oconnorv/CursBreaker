@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
-from .models import LineBox, PlacedLine
+from .models import LineBox, OcrWord, PixelBox, PlacedLine
 
 # Gap between consecutive sorted left-edge coordinates that we treat as a
 # column boundary. Coordinates are normalized 0-1000, so 100 ≈ 10 % of the
@@ -169,6 +169,106 @@ def sort_for_reading_order(detected: list[LineBox]) -> list[LineBox]:
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
+
+
+_WORD_EDGE = re.compile(r"^\W+|\W+$", re.UNICODE)
+
+
+def _norm_word(s: str) -> str:
+    """Normalize a single token for matching: drop surrounding punctuation and
+    lowercase, so 'Death,' and 'death' compare equal."""
+    return _WORD_EDGE.sub("", s).lower()
+
+
+def align_words(
+    line_text: str,
+    ocr_words: list[OcrWord],
+    line_box: PixelBox,
+    *,
+    matched_conf: int,
+    fallback_conf: int,
+) -> list[OcrWord]:
+    """Place each word of ``line_text`` on a real OCR box where the two agree.
+
+    ``line_text`` is the authoritative (Gemini) transcription of one line;
+    ``ocr_words`` are Tesseract's per-word detections for that line, in page
+    pixels. Every word of ``line_text`` is returned, in order, with its text
+    unchanged -- the OCR engine never edits the transcription. A real OCR box is
+    adopted only for words whose text *matches* an OCR word (so a misread can't
+    drag a word to the wrong place); the rest get a box interpolated between
+    their matched neighbours, or split proportionally across ``line_box`` when
+    there are none. ``matched_conf`` is written for adopted boxes,
+    ``fallback_conf`` for synthesized ones.
+    """
+    gold = line_text.split()
+    if not gold:
+        return []
+    assigned: list[OcrWord | None] = [None] * len(gold)
+    if ocr_words:
+        norm_g = [_norm_word(w) for w in gold]
+        norm_o = [_norm_word(w.text) for w in ocr_words]
+        matcher = SequenceMatcher(a=norm_g, b=norm_o, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag != "equal":
+                # Only adopt geometry where the text agrees; replace/delete/
+                # insert all fall through to interpolation below.
+                continue
+            for k in range(i2 - i1):
+                assigned[i1 + k] = OcrWord(
+                    text=gold[i1 + k],
+                    box=ocr_words[j1 + k].box,
+                    confidence=matched_conf,
+                )
+    return _fill_word_gaps(gold, assigned, line_box, fallback_conf)
+
+
+def _fill_word_gaps(
+    gold: list[str],
+    assigned: list[OcrWord | None],
+    line_box: PixelBox,
+    fallback_conf: int,
+) -> list[OcrWord]:
+    """Give every still-unmatched word a synthesized box in the horizontal gap
+    between its nearest matched neighbours (or the line edges), distributed by
+    word length. Vertical extent is borrowed from a neighbour, else the line."""
+    n = len(gold)
+    out: list[OcrWord] = [None] * n  # type: ignore[list-item]
+    i = 0
+    while i < n:
+        if assigned[i] is not None:
+            out[i] = assigned[i]  # type: ignore[assignment]
+            i += 1
+            continue
+        j = i
+        while j < n and assigned[j] is None:
+            j += 1
+        left = assigned[i - 1].box if i > 0 else None
+        right = assigned[j].box if j < n else None
+        x_left = left.x1 if left else line_box.x0
+        x_right = right.x0 if right else line_box.x1
+        if x_right <= x_left:
+            x_right = x_left + 1
+        ref = left or right
+        y0 = ref.y0 if ref else line_box.y0
+        y1 = ref.y1 if ref else line_box.y1
+        run = gold[i:j]
+        total = max(1, sum(len(w) for w in run) + max(0, len(run) - 1))
+        span = x_right - x_left
+        cursor = 0
+        for k, word in enumerate(run):
+            start, end = cursor, cursor + len(word)
+            wx0 = x_left + round(start / total * span)
+            wx1 = x_left + round(end / total * span)
+            if wx1 <= wx0:
+                wx1 = wx0 + 1
+            out[i + k] = OcrWord(
+                text=word,
+                box=PixelBox(x0=wx0, y0=y0, x1=wx1, y1=y1),
+                confidence=fallback_conf,
+            )
+            cursor = end + 1
+        i = j
+    return out
 
 
 def align_lines(

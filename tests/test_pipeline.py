@@ -6,7 +6,8 @@ from cursbreaker import tesseract_client
 from cursbreaker.config import Settings
 from cursbreaker.gemini_client import MockProvider
 from cursbreaker.hocr import XHTML_NS
-from cursbreaker.pipeline import process_batch, process_file
+from cursbreaker.models import LineBox
+from cursbreaker.pipeline import process_batch, process_file, process_page
 
 NS = {"x": XHTML_NS}
 
@@ -123,21 +124,94 @@ def test_content_type_text_errors_clearly_when_tesseract_missing(monkeypatch, tm
     assert results[0].error and "tesseract" in results[0].error.lower()
 
 
-def test_content_type_mixed_routes_printed_to_tesseract_and_handwritten_to_gemini(tmp_path):
+class _MatchingProvider(MockProvider):
+    """A mock whose Gemini transcription matches the printed test page, so the
+    refine step has something Tesseract can agree with."""
+
+    _TEXT = "First printed line\nSecond printed line"
+
+    def transcribe_text(self, image_png: bytes, mime: str = "image/png") -> str:
+        return self._TEXT
+
+    def detect_lines(self, image_png: bytes, mime: str = "image/png"):
+        return [
+            LineBox(text="First printed line", box_2d=[110, 40, 300, 960]),
+            LineBox(text="Second printed line", box_2d=[440, 40, 640, 960]),
+        ]
+
+
+def _load_one(page, **overrides):
+    from cursbreaker.images import load_pages
+
+    return load_pages(
+        page,
+        preprocess=overrides.get("preprocess", True),
+        max_dimension=overrides.get("max_dimension", 0),
+        pdf_dpi=overrides.get("pdf_dpi", 300),
+    )[0]
+
+
+def test_refine_word_boxes_adopts_real_tesseract_boxes_keeping_gemini_text(tmp_path):
+    if not tesseract_client.is_available():
+        pytest.skip("Tesseract binary not installed")
+    page = _printed_page(tmp_path)
+    settings = Settings(
+        content_type="handwriting", mode="two_pass", refine_word_boxes=True
+    )
+    loaded = _load_one(page)
+    result = process_page(loaded, _MatchingProvider(), settings)
+
+    line = next(l for l in result.lines if l.text == "First printed line")
+    # Refinement attached real per-word data; the *text* is still Gemini's words.
+    assert line.words is not None
+    assert [w.text for w in line.words] == ["First", "printed", "line"]
+    # Every word matched a Tesseract word, so all carry the matched confidence
+    # (synthesized fallback boxes would use interpolated_confidence instead).
+    assert all(w.confidence == settings.word_confidence for w in line.words)
+    # Real boxes advance left-to-right and sit within the page.
+    xs = [w.box.x0 for w in line.words]
+    assert xs == sorted(xs)
+    assert all(0 <= w.box.x0 < w.box.x1 <= loaded.sent_width for w in line.words)
+
+
+def test_refine_off_leaves_word_boxes_unsynthesized(tmp_path):
+    # With the toggle off, the handwriting flow is unchanged: no per-word data,
+    # so hOCR falls back to proportional splitting (words=None).
+    page = _printed_page(tmp_path)
+    settings = Settings(content_type="handwriting", refine_word_boxes=False)
+    loaded = _load_one(page)
+    result = process_page(loaded, _MatchingProvider(), settings)
+    assert all(l.words is None for l in result.lines)
+
+
+def test_refine_never_changes_transcription_text(tmp_path):
+    # The whole point: the plain-text transcription must be byte-for-byte the
+    # Gemini output regardless of what Tesseract reads.
+    if not tesseract_client.is_available():
+        pytest.skip("Tesseract binary not installed")
+    page = _printed_page(tmp_path)
+    loaded = _load_one(page)
+    on = process_page(
+        loaded,
+        _MatchingProvider(),
+        Settings(content_type="handwriting", refine_word_boxes=True),
+    )
+    off = process_page(
+        loaded,
+        _MatchingProvider(),
+        Settings(content_type="handwriting", refine_word_boxes=False),
+    )
+    assert on.plain_text == off.plain_text == _MatchingProvider._TEXT
+
+
+def test_refine_word_boxes_label_in_hocr(tmp_path):
     if not tesseract_client.is_available():
         pytest.skip("Tesseract binary not installed")
     out = tmp_path / "out"
     page = _printed_page(tmp_path)
-    settings = Settings(content_type="mixed", use_mock=True)
-    result = process_file(page, MockProvider(), settings, out)
-
-    assert result.error is None
-    # The mock labels alternate kinds, so we expect a mixture of:
-    #   * printed lines whose words come from Tesseract on the cropped region
-    #   * handwritten lines whose text comes from the mock Gemini provider
+    settings = Settings(
+        content_type="handwriting", mode="two_pass", refine_word_boxes=True
+    )
+    process_file(page, _MatchingProvider(), settings, out)
     hocr = (out / f"{page.stem}.hocr").read_text("utf-8")
-    assert "CursBreaker (mixed)" in hocr
-    # The mock Gemini text shows up for handwritten lines. hOCR splits text
-    # one-word-per-span, so check for distinctive mock words rather than the
-    # whole phrase. "Settings" appears only in the mock Gemini sample.
-    assert ">Settings<" in hocr
+    assert "handwriting/two_pass+wordboxes" in hocr

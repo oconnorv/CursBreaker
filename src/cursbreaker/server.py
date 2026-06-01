@@ -71,6 +71,7 @@ async def update_settings(payload: dict):
                 settings.api_key = value
         elif key in fields:
             setattr(settings, key, value)
+    settings.normalize_content()  # migrate a posted legacy "mixed" value
     save_settings(settings)
     return settings.public_dict()
 
