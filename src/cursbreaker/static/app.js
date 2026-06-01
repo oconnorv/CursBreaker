@@ -161,6 +161,13 @@ async function uploadFiles(fileList) {
   }
 }
 
+// The action note doubles as a transient status/error line. This is its
+// resting state -- a summary of what's staged -- restored whenever a transient
+// message (e.g. a prior "no API key" error) should be cleared.
+function stagedStatus() {
+  return staged.length ? `${staged.length} file(s) ready` : "";
+}
+
 function renderStaged() {
   const ul = $("staged");
   ul.innerHTML = "";
@@ -174,12 +181,15 @@ function renderStaged() {
     ul.appendChild(li);
   }
   $("transcribe").disabled = staged.length === 0;
-  $("action-note").textContent = staged.length ? `${staged.length} file(s) ready` : "";
+  $("action-note").textContent = stagedStatus();
 }
 
 // ---- processing --------------------------------------------------------- //
 async function transcribe() {
   if (!staged.length) return;
+  // Drop any leftover error (e.g. a prior "no API key") so it can't linger
+  // through this run.
+  $("action-note").textContent = stagedStatus();
   // Free up screen space the moment work starts so progress + results land
   // above the fold on smaller laptops.
   const sd = $("settings-details");
@@ -272,7 +282,12 @@ function escapeHtml(s) {
 }
 
 function wire() {
-  $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => { $("api_key").value = ""; });
+  $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => {
+    $("api_key").value = "";
+    // A freshly-saved key invalidates any prior "no API key" transcription
+    // error, so clear that stale message immediately.
+    $("action-note").textContent = stagedStatus();
+  });
   $("clear-key").onclick = async () => {
     if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;
     await api("DELETE", "/api/settings/api_key");
