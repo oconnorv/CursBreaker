@@ -125,6 +125,13 @@ if tess_binary is None:
         file=sys.stderr,
     )
 else:
+    # Resolve to ABSOLUTE paths first. PyInstaller resolves *relative* source
+    # paths against the spec's own directory, so a relative discovery result (or
+    # a stray ``CURSBREAKER_TESSDATA_DIR=.`` from CI) must never leak through as
+    # ``packaging/<file>``.
+    tess_binary = tess_binary.resolve()
+    if tessdata_dir is not None:
+        tessdata_dir = tessdata_dir.resolve()
     is_win = sys.platform.startswith("win")
     # Engine binary -> cursbreaker/tesseract (where the frozen resolver looks).
     binaries.append((str(tess_binary), "cursbreaker/tesseract"))

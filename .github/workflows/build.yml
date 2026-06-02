@@ -60,41 +60,20 @@ jobs:
           }
           Write-Host "tessdata holds $((Get-ChildItem "$tessdata\*.traineddata").Count) pack(s)."
           if ($failed.Count) { Write-Warning "Could not download: $($failed -join ', ')" }
+      # Unix: download the full language set (incl. eng/osd from tessdata_fast)
+      # into a dedicated, absolute staging dir -- no fragile system-tessdata
+      # discovery. The engine binary + its shared libs come from apt/brew (the
+      # spec lets PyInstaller auto-collect the lib tree); both locations are
+      # handed to the spec via env vars.
       - name: Bundle Tesseract engine + languages (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd
-          bin="$(command -v tesseract)"
-          tdir="$(dirname "$(find /usr/share /usr/local/share -name eng.traineddata 2>/dev/null | head -1)")"
-          echo "engine=$bin tessdata=$tdir"
+          sudo apt-get update && sudo apt-get install -y tesseract-ocr
+          tdir="$RUNNER_TEMP/tessdata"; mkdir -p "$tdir"
           base="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
           failed=""
           while read -r raw; do
             l="$(echo "${raw%%#*}" | xargs)"; [ -z "$l" ] && continue
-            [ -f "$tdir/$l.traineddata" ] && continue
-            ok=""
-            for i in 1 2 3; do
-              sudo curl -fsSL "$base/$l.traineddata" -o "$tdir/$l.traineddata" && { ok=1; break; }
-              sleep 2
-            done
-            [ -z "$ok" ] && failed="$failed $l"
-          done < packaging/bundled_languages.txt
-          echo "tessdata holds $(ls "$tdir"/*.traineddata | wc -l) pack(s). failed:$failed"
-          echo "CURSBREAKER_TESSERACT_BIN=$bin" >> "$GITHUB_ENV"
-          echo "CURSBREAKER_TESSDATA_DIR=$tdir" >> "$GITHUB_ENV"
-      - name: Bundle Tesseract engine + languages (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install tesseract
-          bin="$(command -v tesseract)"
-          tdir="$(dirname "$(find /opt/homebrew/share /usr/local/share -name eng.traineddata 2>/dev/null | head -1)")"
-          echo "engine=$bin tessdata=$tdir"
-          base="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
-          failed=""
-          while read -r raw; do
-            l="$(echo "${raw%%#*}" | xargs)"; [ -z "$l" ] && continue
-            [ -f "$tdir/$l.traineddata" ] && continue
             ok=""
             for i in 1 2 3; do
               curl -fsSL "$base/$l.traineddata" -o "$tdir/$l.traineddata" && { ok=1; break; }
@@ -102,8 +81,27 @@ jobs:
             done
             [ -z "$ok" ] && failed="$failed $l"
           done < packaging/bundled_languages.txt
-          echo "tessdata holds $(ls "$tdir"/*.traineddata | wc -l) pack(s). failed:$failed"
-          echo "CURSBREAKER_TESSERACT_BIN=$bin" >> "$GITHUB_ENV"
+          echo "staged $(ls "$tdir"/*.traineddata 2>/dev/null | wc -l) pack(s) in $tdir; failed:$failed"
+          echo "CURSBREAKER_TESSERACT_BIN=$(command -v tesseract)" >> "$GITHUB_ENV"
+          echo "CURSBREAKER_TESSDATA_DIR=$tdir" >> "$GITHUB_ENV"
+      - name: Bundle Tesseract engine + languages (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install tesseract
+          tdir="$RUNNER_TEMP/tessdata"; mkdir -p "$tdir"
+          base="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          failed=""
+          while read -r raw; do
+            l="$(echo "${raw%%#*}" | xargs)"; [ -z "$l" ] && continue
+            ok=""
+            for i in 1 2 3; do
+              curl -fsSL "$base/$l.traineddata" -o "$tdir/$l.traineddata" && { ok=1; break; }
+              sleep 2
+            done
+            [ -z "$ok" ] && failed="$failed $l"
+          done < packaging/bundled_languages.txt
+          echo "staged $(ls "$tdir"/*.traineddata 2>/dev/null | wc -l) pack(s) in $tdir; failed:$failed"
+          echo "CURSBREAKER_TESSERACT_BIN=$(command -v tesseract)" >> "$GITHUB_ENV"
           echo "CURSBREAKER_TESSDATA_DIR=$tdir" >> "$GITHUB_ENV"
       - name: Install
         run: |
