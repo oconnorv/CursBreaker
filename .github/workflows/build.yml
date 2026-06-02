@@ -36,11 +36,13 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install --no-progress -y tesseract
       - name: Bundle Tesseract language data (Windows)
-        # Download a broad default set of language packs so a document in another
-        # language never breaks OCR -- this is intentionally not a user option.
+        # Bundle the languages common in ~1700-onward Western records (the
+        # primary use case) so a foreign-language printed doc doesn't break local
+        # OCR -- intentionally not a user option. (Handwriting/Gemini mode reads
+        # any language regardless; this only affects the local Tesseract path.)
         # eng + osd already ship with the choco install; tessdata_fast keeps each
-        # pack small. Edit $langs to add/remove languages. Resilient: a failed
-        # download is skipped (with a warning), never failing the release build.
+        # pack small. Edit $langs to add/remove. Resilient: a failed download is
+        # skipped (with a warning), never failing the release build.
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -48,21 +50,16 @@ jobs:
           $base = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
           $langs = @(
             # Western & Southern European
-            "fra","deu","spa","ita","por","nld","cat",
-            # Historical / classical (common in genealogy & archives)
-            "lat","grc","frk","enm",
+            "fra","deu","spa","ita","por","nld",
+            # Latin + German Fraktur -- still the norm in 1700+ church, legal,
+            # and printed German records (Fraktur was used into the 1940s).
+            "lat","frk",
             # Nordic
-            "dan","swe","nor","fin","isl",
-            # Central & Eastern European
-            "pol","ces","slk","hun","ron","hrv","slv",
-            # Baltic
-            "lit","lav","est",
-            # Cyrillic & Greek
-            "rus","ukr","bul","srp","ell",
-            # British Isles / Celtic
-            "gle","cym","gla",
-            # Major world languages
-            "ara","heb","chi_sim","chi_tra","jpn","kor","vie","hin","tha","tur"
+            "dan","swe","nor","fin",
+            # Central European
+            "pol","ces","hun",
+            # Eastern European & Greek
+            "rus","ukr","ell"
           )
           $failed = @()
           foreach ($l in $langs) {

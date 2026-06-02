@@ -140,10 +140,12 @@ offending files to `upx_exclude` or disable UPX for the engine binaries.
 
 - Ship language data under a bundled `tessdata/` directory; the resolver
   auto-sets `TESSDATA_PREFIX` to it.
-- **Languages are bundled broadly by default, not opt-in.** A document in another
-  language shouldn't break OCR, and the target users don't care about a few extra
-  MB. The Windows CI job downloads a generous default set (European incl.
-  historical/classical, Cyrillic, Greek, and the major world languages) into
+- **Languages are bundled by default, not opt-in.** A foreign-language printed
+  document shouldn't break local OCR, and the target users don't care about a few
+  extra MB. (Handwriting/Gemini mode reads any language regardless; bundled packs
+  only affect the local Tesseract path.) The Windows CI job downloads a default
+  set focused on **~1700-onward Western records** — Western/Central/Northern
+  European, Latin, German Fraktur (`frk`), Russian/Ukrainian, and Greek — into
   `tessdata` before packaging; the spec then ships **every** `*.traineddata`
   present. Edit the `$langs` list in `.github/workflows/build.yml` to adjust.
 - There are three data flavors: `tessdata_fast` (smallest), `tessdata`
