@@ -1,10 +1,13 @@
 # Bundling the Tesseract engine with CursBreaker
 
-> Status: **Phase 1 implemented (Windows)**. The Windows build now bundles the
-> engine, and the resolver auto-detects a bundled engine, a portable build in an
-> app-managed folder, and per-user installs — all without administrator rights.
-> macOS/Linux bundling (Phase 2) and a possible in-app downloader remain future
-> work. Windows is the priority platform.
+> Status: **Phase 1 + 2 implemented (Windows, macOS, Linux)**. All three builds
+> bundle the engine + a default language set, and the resolver auto-detects a
+> bundled engine, a portable build in an app-managed folder, and per-user
+> installs — all without administrator rights. On macOS/Linux PyInstaller
+> auto-collects the engine's shared-library dependency tree and the resolver
+> points the dynamic loader at the bundle (see below). The macOS runtime is
+> build-validated only (no Mac in CI test) — see the macOS note. A possible
+> in-app downloader (Phase 3) remains future work.
 
 ## No-admin options (important)
 
@@ -183,11 +186,28 @@ the artifact) to satisfy the Apache attribution requirement.
   `%LOCALAPPDATA%` install).
   *Remaining validation:* a real CI run and a smoke test on a clean Windows VM
   with no separate Tesseract install.
-- **Phase 2 — macOS & Linux:** repeat with `brew`/`apt` plus `otool`/`ldd`
-  library gathering (the spec's Tesseract block is currently gated to Windows).
+- **Phase 2 — macOS & Linux (done):** the spec adds the engine binary and lets
+  PyInstaller auto-collect its **whole** shared-library dependency tree into the
+  bundle root (validated on Linux: it pulls the full chain, ~55 libs, zero gaps);
+  no hand-gathering via `ldd`/`otool`. Because PyInstaller doesn't rpath the
+  added binary, the runtime resolver (`_point_loader_at_bundle`) prepends the
+  bundle root to `LD_LIBRARY_PATH` (Linux) / `DYLD_LIBRARY_PATH` +
+  `DYLD_FALLBACK_LIBRARY_PATH` (macOS) for the bundled engine only. CI installs
+  the engine (`apt`/`brew`) and downloads the language set; UPX is disabled so it
+  can't corrupt the native libs.
+  - **Linux:** validated end-to-end locally — the real frozen app reports
+    `source=bundled` and OCRs using only the bundled libs (system PATH hidden).
+  - **macOS note (build-validated only):** symmetric mechanism, but not runtime-
+    tested (no Mac available). Watch two things on a real Mac: (1) `DYLD_*` is
+    sometimes stripped by SIP — we set the fallback var too, and we launch our
+    *own* unsigned binary, which normally preserves it; (2) Gatekeeper — the app
+    is unsigned, so the user must already allow it (same as the main executable);
+    once allowed, the bundled `tesseract` subprocess runs without a separate
+    prompt.
 - **Phase 3 — evaluate alternatives:** an in-app portable-engine downloader
-  (no-admin, fetches into the managed folder), and/or approach C (pure-pip OCR)
-  behind an engine abstraction if native bundling proves fragile.
+  (no-admin, fetches into the managed folder), code-signing/notarizing the macOS
+  build, and/or approach C (pure-pip OCR) behind an engine abstraction if native
+  bundling proves fragile.
 
 Every phase lands the engine in the same place the resolver already checks
 (`_app_root()/tesseract`), so none of them require touching the transcription

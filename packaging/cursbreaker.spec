@@ -1,24 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Cross-platform PyInstaller spec. Build with: pyinstaller packaging/cursbreaker.spec
 
-It encodes three things:
-  1. Bundle the static web UI under ``cursbreaker/static`` so the server finds
-     it at runtime.
-  2. Collect uvicorn/fastapi/google-genai submodules that PyInstaller's static
-     analysis misses.
-  3. (Phase 1, Windows) Bundle the Tesseract engine itself -- the binary, its
-     DLLs, and selected language packs -- so end users need no separate,
-     admin-requiring install. The runtime resolver in ``tesseract_client.py``
-     looks for the engine at ``<app>/tesseract/tesseract(.exe)`` with language
-     data in ``<app>/tessdata`` first, so dropping the files there is all that
-     is required -- no app-code change.
+It encodes:
+  1. Bundle the static web UI under ``cursbreaker/static`` so the server finds it.
+  2. Collect uvicorn/fastapi/google-genai submodules PyInstaller's analysis misses.
+  3. Bundle the Tesseract engine + language packs so end users need no separate,
+     admin-requiring install. The runtime resolver (``tesseract_client.py``) looks
+     for the engine at ``<app>/tesseract/tesseract(.exe)`` -- i.e.
+     ``sys._MEIPASS/cursbreaker/tesseract/...`` -- with language data in
+     ``<app>/tesseract/tessdata``.
 
-The Tesseract bundling is gated on the build OS and degrades to a no-op (with a
-printed warning) when no engine is found on the build machine, so Linux/macOS
-builds and Windows builds without Tesseract installed still succeed.
+     * Windows: the engine's DLLs are copied next to the binary (Windows resolves
+       DLLs from the executable's own folder).
+     * macOS/Linux: PyInstaller follows the binary and auto-collects its whole
+       shared-library dependency tree into the bundle root; the runtime resolver
+       prepends that dir to LD_LIBRARY_PATH / DYLD_* so the libs load. (Validated:
+       PyInstaller pulls the full chain and the engine runs self-contained.)
+
+The engine bundling degrades to a no-op (with a warning) when no Tesseract is
+found on the build machine, so a build always succeeds.
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -35,71 +39,129 @@ for pkg in ("fastapi", "starlette", "google.genai", "pymupdf", "lxml", "pytesser
     hiddenimports += pkg_hidden
 
 
-def _find_windows_tesseract_dir():
-    """Locate an installed Tesseract on the (Windows) build machine."""
-    candidates = []
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        candidates.append(Path(local) / "Programs" / "Tesseract-OCR")
-    candidates += [
-        Path(r"C:\Program Files\Tesseract-OCR"),
-        Path(r"C:\Program Files (x86)\Tesseract-OCR"),
-    ]
-    for d in candidates:
-        if (d / "tesseract.exe").is_file():
-            return d
+def _first(paths, kind):
+    for p in paths:
+        if kind == "file" and p.is_file():
+            return p
+        if kind == "dir" and p.is_dir():
+            return p
     return None
 
 
-# Files we never want UPX to touch: compressing some native DLLs corrupts them
-# and the bundled engine then fails to start.
-upx_exclude = []
+def _windows_install_dirs():
+    out = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        out.append(Path(local) / "Programs" / "Tesseract-OCR")
+    out += [
+        Path(r"C:\Program Files\Tesseract-OCR"),
+        Path(r"C:\Program Files (x86)\Tesseract-OCR"),
+    ]
+    return out
 
-if sys.platform.startswith("win"):
-    tess_dir = _find_windows_tesseract_dir()
-    if tess_dir is None:
+
+def _discover_engine():
+    """Return ``(binary_path, tessdata_dir)`` for this build OS, or ``(None, None)``.
+
+    CI sets ``CURSBREAKER_TESSERACT_BIN`` / ``CURSBREAKER_TESSDATA_DIR`` for the
+    Unix runners; otherwise we probe the usual per-OS locations so a local dev
+    build also bundles whatever Tesseract is installed.
+    """
+    is_win = sys.platform.startswith("win")
+    env_bin = os.environ.get("CURSBREAKER_TESSERACT_BIN")
+    env_data = os.environ.get("CURSBREAKER_TESSDATA_DIR")
+    binary = Path(env_bin) if env_bin else None
+    tessdata = Path(env_data) if env_data else None
+
+    if binary is None:
+        if is_win:
+            binary = _first([d / "tesseract.exe" for d in _windows_install_dirs()], "file")
+        else:
+            which = shutil.which("tesseract")
+            binary = Path(which) if which else _first(
+                [Path(p) for p in (
+                    "/opt/homebrew/bin/tesseract",
+                    "/usr/local/bin/tesseract",
+                    "/usr/bin/tesseract",
+                )], "file")
+    if binary is None or not binary.is_file():
+        return None, None
+
+    if tessdata is None:
+        if is_win:
+            tessdata = binary.parent / "tessdata"
+        else:
+            tessdata = _first([Path(p) for p in (
+                "/usr/share/tesseract-ocr/5/tessdata",
+                "/usr/share/tesseract-ocr/4.00/tessdata",
+                "/usr/share/tessdata",
+                "/usr/local/share/tessdata",
+                "/opt/homebrew/share/tessdata",
+            )], "dir")
+    return binary, (tessdata if (tessdata and tessdata.is_dir()) else None)
+
+
+def _allowed_languages():
+    """The language allow-list from ``bundled_languages.txt`` (one code per line),
+    or ``None`` to ship whatever is present -- a local-dev convenience and a guard
+    against package managers (e.g. Homebrew) that pre-install a huge language set.
+    """
+    f = Path(SPECPATH) / "bundled_languages.txt"
+    if not f.is_file():
+        return None
+    langs = set()
+    for line in f.read_text().splitlines():
+        code = line.split("#", 1)[0].strip()
+        if code:
+            langs.add(code)
+    return langs or None
+
+
+tess_binary, tessdata_dir = _discover_engine()
+if tess_binary is None:
+    print(
+        "WARNING: no Tesseract found on this build machine; building WITHOUT a "
+        "bundled engine.",
+        file=sys.stderr,
+    )
+else:
+    # Resolve to ABSOLUTE paths first. PyInstaller resolves *relative* source
+    # paths against the spec's own directory, so a relative discovery result (or
+    # a stray ``CURSBREAKER_TESSDATA_DIR=.`` from CI) must never leak through as
+    # ``packaging/<file>``.
+    tess_binary = tess_binary.resolve()
+    if tessdata_dir is not None:
+        tessdata_dir = tessdata_dir.resolve()
+    is_win = sys.platform.startswith("win")
+    # Engine binary -> cursbreaker/tesseract (where the frozen resolver looks).
+    binaries.append((str(tess_binary), "cursbreaker/tesseract"))
+    if is_win:
+        # Windows loads DLLs from the exe's own folder, so co-locate them.
+        for dll in tess_binary.parent.glob("*.dll"):
+            binaries.append((str(dll), "cursbreaker/tesseract"))
+    # macOS/Linux: PyInstaller auto-collects the binary's shared-library
+    # dependency tree into the bundle root; the resolver points the dynamic
+    # loader there at runtime -- nothing to gather by hand.
+
+    allow = _allowed_languages()
+    shipped = []
+    if tessdata_dir is None:
         print(
-            "WARNING: no Tesseract install found on this build machine; the "
-            "executable will ship WITHOUT a bundled engine. Install it first "
-            "(e.g. 'choco install tesseract') to bundle it.",
+            f"WARNING: Tesseract at {tess_binary} but no tessdata directory "
+            "found; the bundle will have NO language data.",
             file=sys.stderr,
         )
     else:
-        # The engine binary + every DLL beside it. Destinations MUST sit under
-        # ``cursbreaker/`` because the frozen resolver's _app_root() is
-        # ``sys._MEIPASS/cursbreaker`` -- it probes
-        # ``cursbreaker/tesseract/tesseract.exe`` (mirrors the ``cursbreaker/
-        # static`` datas entry above). Top-level ``tesseract/`` would ship the
-        # engine but leave it undetectable.
-        binaries.append((str(tess_dir / "tesseract.exe"), "cursbreaker/tesseract"))
-        for dll in tess_dir.glob("*.dll"):
-            binaries.append((str(dll), "cursbreaker/tesseract"))
-            upx_exclude.append(dll.name)
-        upx_exclude.append("tesseract.exe")
+        for p in sorted(tessdata_dir.glob("*.traineddata")):
+            if allow is None or p.stem in allow:
+                datas.append((str(p), "cursbreaker/tesseract/tessdata"))
+                shipped.append(p.stem)
+    print(f"Bundling Tesseract {tess_binary} ({len(shipped)} languages: {shipped})")
 
-        # Ship every language pack present in the build machine's tessdata. CI
-        # downloads a broad default set (see .github/workflows/build.yml) so a
-        # foreign-language document never breaks OCR; a local dev build ships
-        # whatever languages happen to be installed.
-        src_tessdata = tess_dir / "tessdata"
-        shipped = sorted(p.stem for p in src_tessdata.glob("*.traineddata"))
-        for p in src_tessdata.glob("*.traineddata"):
-            datas.append((str(p), "cursbreaker/tesseract/tessdata"))
-        if not shipped:
-            print(
-                f"WARNING: Tesseract found but {src_tessdata} contains no "
-                "language data (*.traineddata).",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"Bundling Tesseract {tess_dir} with {len(shipped)} "
-                f"languages: {shipped}"
-            )
 
 a = Analysis(
     ["launch.py"],
-    pathex=[],
+    pathex=["../src"],  # find the cursbreaker package even without `pip install`
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -119,6 +181,7 @@ exe = EXE(
     name="cursbreaker",
     console=True,
     disable_windowed_traceback=False,
-    upx=True,
-    upx_exclude=upx_exclude,
+    # UPX is off: compressing the bundled native engine / its shared libraries
+    # can corrupt them, and the target users prioritize "it just works" over size.
+    upx=False,
 )

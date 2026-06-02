@@ -303,3 +303,45 @@ def test_spec_bundles_engine_under_cursbreaker_app_root():
     # The top-level destinations the resolver can't see must NOT appear.
     assert ', "tesseract")' not in spec
     assert ', "tessdata")' not in spec
+
+
+import os as _os  # noqa: E402  (loader-path tests below)
+
+
+def test_point_loader_at_bundle_sets_ld_library_path(monkeypatch, tmp_path):
+    # Simulate a frozen Linux bundle: _MEIPASS set + the bundled engine path.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    bundled = str(tmp_path / "cursbreaker" / "tesseract" / "tesseract")
+    tesseract_client._point_loader_at_bundle(bundled)
+    # The bundle root (where PyInstaller drops the engine's libs) is on the path.
+    assert _os.environ.get("LD_LIBRARY_PATH") == str(tmp_path)
+
+
+def test_point_loader_at_bundle_uses_dyld_on_macos(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.delenv("DYLD_LIBRARY_PATH", raising=False)
+    monkeypatch.delenv("DYLD_FALLBACK_LIBRARY_PATH", raising=False)
+    bundled = str(tmp_path / "cursbreaker" / "tesseract" / "tesseract")
+    tesseract_client._point_loader_at_bundle(bundled)
+    assert _os.environ.get("DYLD_LIBRARY_PATH") == str(tmp_path)
+    assert _os.environ.get("DYLD_FALLBACK_LIBRARY_PATH") == str(tmp_path)
+
+
+def test_point_loader_at_bundle_ignores_system_binary(monkeypatch, tmp_path):
+    # A non-bundled (system/PATH) binary must not touch the loader path.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    tesseract_client._point_loader_at_bundle("/usr/bin/tesseract")
+    assert "LD_LIBRARY_PATH" not in _os.environ
+
+
+def test_point_loader_at_bundle_noop_when_not_frozen(monkeypatch):
+    # No _MEIPASS (regular install) -> never touches the environment.
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    tesseract_client._point_loader_at_bundle("/anything/cursbreaker/tesseract/tesseract")
+    assert "LD_LIBRARY_PATH" not in _os.environ

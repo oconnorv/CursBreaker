@@ -54,6 +54,32 @@ def _app_root() -> Path:
     return Path(__file__).parent
 
 
+def _point_loader_at_bundle(cmd: Optional[str]) -> None:
+    """Make the bundled engine's co-bundled shared libraries loadable.
+
+    On macOS/Linux PyInstaller collects the engine's whole dependency tree into
+    the bundle root (``sys._MEIPASS``) but does not rpath the binary, so for the
+    *bundled* engine we prepend that dir to the platform's dynamic-loader search
+    path -- the tesseract subprocess then finds its libs there. Acts only in a
+    frozen build, only for the bundled binary, and is a no-op on Windows (DLLs
+    sit beside the .exe and load automatically)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass or not cmd:
+        return
+    if os.path.dirname(cmd) != str(_app_root() / "tesseract"):
+        return  # not our bundled engine -- leave the loader path alone
+    if sys.platform == "darwin":
+        keys = ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH")
+    elif sys.platform.startswith("win"):
+        return
+    else:
+        keys = ("LD_LIBRARY_PATH",)
+    for key in keys:
+        parts = [p for p in os.environ.get(key, "").split(os.pathsep) if p]
+        if meipass not in parts:
+            os.environ[key] = os.pathsep.join([meipass, *parts])
+
+
 def _managed_dir() -> Path:
     """App-managed folder a user can drop a *portable* Tesseract into.
 
@@ -199,6 +225,7 @@ def resolve_tesseract(settings=None) -> Optional[str]:
 
     resolved = cmd or "tesseract"  # PATH fallback; deterministic on every call
     pytesseract.pytesseract.tesseract_cmd = resolved
+    _point_loader_at_bundle(cmd)  # bundled engine: make its libs loadable
 
     if not os.environ.get("TESSDATA_PREFIX"):
         tessdata = _candidate_tessdata(cmd)
