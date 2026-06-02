@@ -24,10 +24,6 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-# Language packs to ship with the bundle. eng + osd are the floor; the rest
-# cover common cultural-heritage materials. Extra languages remain a drop-in.
-BUNDLE_LANGS = ("eng", "osd", "fra", "deu", "spa", "lat")
-
 datas = [("../src/cursbreaker/static", "cursbreaker/static")]
 binaries = []
 hiddenimports = collect_submodules("uvicorn")
@@ -81,24 +77,25 @@ if sys.platform.startswith("win"):
             upx_exclude.append(dll.name)
         upx_exclude.append("tesseract.exe")
 
-        # Language packs go beside the binary at cursbreaker/tesseract/tessdata,
-        # which _candidate_tessdata() checks first (Path(cmd).parent/"tessdata")
-        # and points TESSDATA_PREFIX at.
+        # Ship every language pack present in the build machine's tessdata. CI
+        # downloads a broad default set (see .github/workflows/build.yml) so a
+        # foreign-language document never breaks OCR; a local dev build ships
+        # whatever languages happen to be installed.
         src_tessdata = tess_dir / "tessdata"
-        shipped = []
-        for lang in BUNDLE_LANGS:
-            tf = src_tessdata / f"{lang}.traineddata"
-            if tf.is_file():
-                datas.append((str(tf), "cursbreaker/tesseract/tessdata"))
-                shipped.append(lang)
+        shipped = sorted(p.stem for p in src_tessdata.glob("*.traineddata"))
+        for p in src_tessdata.glob("*.traineddata"):
+            datas.append((str(p), "cursbreaker/tesseract/tessdata"))
         if not shipped:
             print(
-                "WARNING: Tesseract found but no requested language packs were "
-                f"present in {src_tessdata}.",
+                f"WARNING: Tesseract found but {src_tessdata} contains no "
+                "language data (*.traineddata).",
                 file=sys.stderr,
             )
         else:
-            print(f"Bundling Tesseract {tess_dir} with languages: {shipped}")
+            print(
+                f"Bundling Tesseract {tess_dir} with {len(shipped)} "
+                f"languages: {shipped}"
+            )
 
 a = Analysis(
     ["launch.py"],

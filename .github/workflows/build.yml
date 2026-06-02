@@ -35,6 +35,50 @@ jobs:
         # build still succeeds but ships no engine.
         if: runner.os == 'Windows'
         run: choco install --no-progress -y tesseract
+      - name: Bundle Tesseract language data (Windows)
+        # Download a broad default set of language packs so a document in another
+        # language never breaks OCR -- this is intentionally not a user option.
+        # eng + osd already ship with the choco install; tessdata_fast keeps each
+        # pack small. Edit $langs to add/remove languages. Resilient: a failed
+        # download is skipped (with a warning), never failing the release build.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tessdata = "C:\Program Files\Tesseract-OCR\tessdata"
+          $base = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          $langs = @(
+            # Western & Southern European
+            "fra","deu","spa","ita","por","nld","cat",
+            # Historical / classical (common in genealogy & archives)
+            "lat","grc","frk","enm",
+            # Nordic
+            "dan","swe","nor","fin","isl",
+            # Central & Eastern European
+            "pol","ces","slk","hun","ron","hrv","slv",
+            # Baltic
+            "lit","lav","est",
+            # Cyrillic & Greek
+            "rus","ukr","bul","srp","ell",
+            # British Isles / Celtic
+            "gle","cym","gla",
+            # Major world languages
+            "ara","heb","chi_sim","chi_tra","jpn","kor","vie","hin","tha","tur"
+          )
+          $failed = @()
+          foreach ($l in $langs) {
+            $ok = $false
+            for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
+              try {
+                Invoke-WebRequest -Uri "$base/$l.traineddata" `
+                  -OutFile "$tessdata\$l.traineddata" -UseBasicParsing -TimeoutSec 60
+                $ok = $true
+              } catch { Start-Sleep -Seconds 2 }
+            }
+            if (-not $ok) { $failed += $l }
+          }
+          $have = (Get-ChildItem "$tessdata\*.traineddata" | Measure-Object).Count
+          Write-Host "tessdata now holds $have language pack(s)."
+          if ($failed.Count -gt 0) { Write-Warning "Could not download: $($failed -join ', ')" }
       - name: Install
         run: |
           python -m pip install --upgrade pip

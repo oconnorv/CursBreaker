@@ -138,13 +138,17 @@ offending files to `upx_exclude` or disable UPX for the engine binaries.
 
 ## Language data (`tessdata`) and `TESSDATA_PREFIX`
 
-- Ship at least `eng.traineddata` under a bundled `tessdata/` directory; the
-  resolver auto-sets `TESSDATA_PREFIX` to it.
-- Language packs are large, so keep extra languages opt-in (a later "download
-  language" feature, or document adding files to the user `tessdata`).
+- Ship language data under a bundled `tessdata/` directory; the resolver
+  auto-sets `TESSDATA_PREFIX` to it.
+- **Languages are bundled broadly by default, not opt-in.** A document in another
+  language shouldn't break OCR, and the target users don't care about a few extra
+  MB. The Windows CI job downloads a generous default set (European incl.
+  historical/classical, Cyrillic, Greek, and the major world languages) into
+  `tessdata` before packaging; the spec then ships **every** `*.traineddata`
+  present. Edit the `$langs` list in `.github/workflows/build.yml` to adjust.
 - There are three data flavors: `tessdata_fast` (smallest), `tessdata`
-  (standard), `tessdata_best` (largest/most accurate). Prefer `fast` or
-  standard for size.
+  (standard), `tessdata_best` (largest/most accurate). We use `tessdata_fast`
+  for the downloaded packs so a broad set stays small.
 
 ## Licensing
 
@@ -168,11 +172,12 @@ the artifact) to satisfy the Apache attribution requirement.
   bundled → well-known → PATH; diagnostics name the actual gap. No binary
   bundled yet.
 - **Phase 1 — Windows (done):** the spec copies the engine binary, its DLLs and
-  selected language packs (`eng, osd, fra, deu, spa, lat`) from the build
-  machine's install into the bundle (`tesseract/` + `tessdata/`), with
-  `upx_exclude` so UPX can't corrupt the DLLs; the Windows CI job runs
-  `choco install tesseract` first. The resolver adds no-admin discovery (bundled
-  engine, portable drop-in folder, per-user `%LOCALAPPDATA%` install).
+  **all** installed language packs into the bundle (`cursbreaker/tesseract/` +
+  `cursbreaker/tesseract/tessdata/`), with `upx_exclude` so UPX can't corrupt the
+  DLLs. The Windows CI job runs `choco install tesseract` (eng + osd) and then
+  downloads a broad default language set (`tessdata_fast`). The resolver adds
+  no-admin discovery (bundled engine, portable drop-in folder, per-user
+  `%LOCALAPPDATA%` install).
   *Remaining validation:* a real CI run and a smoke test on a clean Windows VM
   with no separate Tesseract install.
 - **Phase 2 — macOS & Linux:** repeat with `brew`/`apt` plus `otool`/`ldd`
