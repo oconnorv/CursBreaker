@@ -13,21 +13,28 @@ handwriting accuracy).
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from typing import Protocol
 
 from .config import Settings
 from .models import LineBox
 
-# Shown in the UI as hints when a live model list is unavailable. The UI prefers
-# the live list from the user's key; model names change frequently.
+# Shown as hints only when the live model list is unavailable; the UI prefers
+# the live list from the user's key. We keep these to currently-callable models:
+# retired "preview" names (e.g. gemini-3-pro-preview) still show up in the API's
+# ListModels output but 404 on use, so suggesting them would mislead.
 SUGGESTED_MODELS = [
     "gemini-3.1-pro-preview",
-    "gemini-3-pro-preview",
-    "gemini-3-pro",
     "gemini-2.5-pro",
     "gemini-2.5-flash",
+    "gemini-flash-latest",
 ]
+
+# Stable, broadly-available models to fall back to when the configured model has
+# been retired (preview models get removed without notice). Ordered best-first;
+# flash is included because it's reachable on more keys (incl. free tier).
+FALLBACK_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
 
 _READING_ORDER_RULE = (
     "Use natural reading order: if the page has multiple columns, finish each "
@@ -117,6 +124,24 @@ def _is_auth_error(exc: Exception) -> bool:
     return any(m in blob for m in _AUTH_MARKERS)
 
 
+# Substrings marking a model that exists in ListModels but can't be called
+# (retired/renamed/not granted). Version-independent.
+_MODEL_GONE_MARKERS = (
+    "NOT_FOUND", "NO LONGER AVAILABLE", "IS NOT FOUND", "NOT SUPPORTED",
+    "DOES NOT EXIST", "UNKNOWN MODEL", "NOT FOUND FOR API VERSION",
+)
+
+
+def _is_model_unavailable(exc: Exception) -> bool:
+    """True when an error means the *model* is gone (vs. a key/network problem),
+    so we can fall back to another model instead of failing the whole job."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code == 404:
+        return True
+    blob = f"{getattr(exc, 'message', '')} {exc}".upper()
+    return any(m in blob for m in _MODEL_GONE_MARKERS)
+
+
 def _probe_models(key: str) -> None:
     """One ListModels request to verify a key. Free -- it returns metadata only,
     spending no generation tokens or quota. Returns on success; raises on
@@ -171,6 +196,9 @@ class GeminiProvider:
         self.settings = settings
         self._genai = genai
         self.client = genai.Client(api_key=api_key)
+        # Models that returned "not found" this session; skip re-trying them and
+        # go straight to a fallback so we don't repeat the failed call per page.
+        self._dead_models: set[str] = set()
 
     # -- public API ---------------------------------------------------------
 
@@ -221,6 +249,43 @@ class GeminiProvider:
     # -- internals ----------------------------------------------------------
 
     def _generate(self, model, prompt, image_png, mime, schema=None):
+        """Call ``model``; if it has been retired (404 / not-found), fall back to
+        a stable model so a stale config can't kill the job. Any other failure
+        (auth, bad request, network) is surfaced unchanged -- we only switch
+        models when the model itself is the problem."""
+        last_exc: Exception | None = None
+        candidates = self._model_candidates(model)
+        for m in candidates:
+            try:
+                return self._invoke(m, prompt, image_png, mime, schema)
+            except Exception as exc:
+                if not _is_model_unavailable(exc):
+                    raise  # a real error -- don't mask it by trying other models
+                self._dead_models.add(m)
+                last_exc = exc
+                if m != candidates[-1]:
+                    print(
+                        f"WARNING: Gemini model '{m}' is unavailable (it may have "
+                        "been retired); falling back to another model.",
+                        file=sys.stderr,
+                    )
+        raise RuntimeError(
+            "The configured Gemini model is unavailable and no fallback worked "
+            f"(tried: {', '.join(candidates)}). It may have been retired -- pick "
+            f"a current model in Settings. Last error: {last_exc}"
+        )
+
+    def _model_candidates(self, model: str) -> list[str]:
+        """Requested model first, then stable fallbacks, minus any already known
+        unavailable this session."""
+        ordered = [model] + [m for m in FALLBACK_MODELS if m != model]
+        live = [m for m in ordered if m not in self._dead_models]
+        return live or ordered
+
+    def _invoke(self, model, prompt, image_png, mime, schema):
+        """One model attempt, with the optional-knob minimal-config retry. A
+        not-found error is re-raised at once so ``_generate`` can fall back
+        without wasting the minimal retry on a model that's gone."""
         from google.genai import types
 
         part = types.Part.from_bytes(data=image_png, mime_type=mime)
@@ -230,7 +295,9 @@ class GeminiProvider:
             return self.client.models.generate_content(
                 model=model, contents=contents, config=cfg
             )
-        except Exception:
+        except Exception as exc:
+            if _is_model_unavailable(exc):
+                raise
             # Optional knobs (thinking/media resolution) aren't supported by
             # every model; retry once with a minimal config before giving up.
             cfg = self._config(types, schema=schema, minimal=True)
