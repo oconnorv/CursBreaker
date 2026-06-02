@@ -26,19 +26,6 @@ class LineBox(BaseModel):
     box_2d: list[int]
 
 
-class LabeledLineBox(BaseModel):
-    """A line-box with a printed/handwritten label, used by mixed-content mode.
-
-    Same wire constraints as ``LineBox`` (no defaults). The ``kind`` field is
-    expected to be ``"printed"`` or ``"handwritten"``; anything else falls
-    through to handwriting in the pipeline so the page is never lost.
-    """
-
-    text: str
-    box_2d: list[int]
-    kind: str
-
-
 class PlacedLine(BaseModel):
     """A line text placed onto a normalized box, with provenance.
 

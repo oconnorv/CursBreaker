@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .align import align_lines
+from .align import align_lines, align_words
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
 from .images import load_pages
-from .models import LabeledLineBox, PageResult, PlacedLine, TranscribedLine
+from .models import OcrWord, PageResult, PixelBox, PlacedLine, TranscribedLine
 from .searchable_pdf import build_searchable_pdf
 from . import tesseract_client
 
@@ -41,14 +41,20 @@ def process_page(loaded, provider: TranscriptionProvider, settings: Settings) ->
     if content == "text":
         return _process_page_text_only(loaded, settings)
     if content == "mixed":
-        return _process_page_mixed(loaded, provider, settings)
+        # Retired alias: "Gemini text + Tesseract" is now handwriting with word-
+        # box refinement. Defensive, in case an un-migrated value reaches here.
+        settings = settings.model_copy(
+            update={"content_type": "handwriting", "refine_word_boxes": True}
+        )
     return _process_page_handwriting(loaded, provider, settings)
 
 
 def _process_page_handwriting(
     loaded, provider: TranscriptionProvider, settings: Settings
 ) -> PageResult:
-    """Original Gemini-only flow: one-pass or two-pass with alignment."""
+    """Gemini transcription (one-pass, or two-pass with line alignment). The
+    Gemini text is always authoritative; when ``refine_word_boxes`` is set and
+    Tesseract is available, real per-word boxes are layered on afterwards."""
     png = loaded.to_png_bytes()
     if settings.mode == "one_pass":
         items = provider.transcribe_with_boxes(png)
@@ -77,6 +83,11 @@ def _process_page_handwriting(
                 confidence=conf,
             )
         )
+    # Optional, purely additive: refine word *positions* with Tesseract. The
+    # Gemini transcription above is already final; this only attaches real
+    # per-word boxes where Tesseract agrees, and can never change the text.
+    if settings.refine_word_boxes and tesseract_client.is_available(settings):
+        _refine_word_boxes(loaded.image, lines, settings)
     return PageResult(
         image_name=f"{loaded.output_stem}.png",
         width=w,
@@ -88,7 +99,7 @@ def _process_page_handwriting(
 
 def _process_page_text_only(loaded, settings: Settings) -> PageResult:
     """Tesseract-only flow: no Gemini call, real per-word boxes throughout."""
-    tesseract_client.require_available()
+    tesseract_client.require_available(settings)
     w, h = loaded.sent_width, loaded.sent_height
     lines = tesseract_client.transcribe_page(
         loaded.image, lang=settings.tesseract_language
@@ -103,55 +114,35 @@ def _process_page_text_only(loaded, settings: Settings) -> PageResult:
     )
 
 
-def _process_page_mixed(
-    loaded, provider: TranscriptionProvider, settings: Settings
-) -> PageResult:
-    """Gemini labels each line printed/handwritten; printed lines go through
-    Tesseract on the cropped region (real per-word boxes), handwritten lines
-    use Gemini's own transcription from the labeled detection. Outputs are
-    merged in reading order. Gemini never sees Tesseract's text."""
-    tesseract_client.require_available()
-    png = loaded.to_png_bytes()
-    labeled = provider.detect_lines_labeled(png)
-
-    w, h = loaded.sent_width, loaded.sent_height
-    lines: list[TranscribedLine] = []
-    for item in labeled:
-        # Normalized -> pixel for the line bounds first; we may crop the page
-        # image at those coordinates to feed Tesseract.
-        line_box = normalized_to_pixel(item.box_2d, w, h)
-        if item.kind == "printed":
-            lines.extend(_tesseract_line_from_crop(loaded.image, line_box, settings))
-        else:
-            lines.append(
-                TranscribedLine(
-                    text=item.text,
-                    box=line_box,
-                    confidence=settings.word_confidence,
-                )
-            )
-
-    plain_text = "\n".join(l.text for l in lines)
-    return PageResult(
-        image_name=f"{loaded.output_stem}.png",
-        width=w,
-        height=h,
-        lines=lines,
-        plain_text=plain_text,
-    )
+def _refine_word_boxes(
+    page_image, lines: list[TranscribedLine], settings: Settings
+) -> None:
+    """In place: attach real Tesseract word boxes to each line where the engine's
+    text agrees with Gemini's. Line text is never touched; any per-line failure
+    is swallowed so that line simply keeps its proportional word boxes."""
+    for line in lines:
+        try:
+            ocr_words = _tesseract_words_for_line(page_image, line.box, settings)
+        except Exception:
+            # Tesseract choking on one region must not lose that line's text.
+            continue
+        if not ocr_words:
+            continue  # leave words=None -> hOCR splits the line box proportionally
+        line.words = align_words(
+            line.text,
+            ocr_words,
+            line.box,
+            matched_conf=settings.word_confidence,
+            fallback_conf=settings.interpolated_confidence,
+        )
 
 
-def _tesseract_line_from_crop(
-    page_image, line_box, settings: Settings
-) -> list[TranscribedLine]:
-    """Crop ``line_box`` from the page, OCR it with Tesseract, and return
-    TranscribedLine objects whose coordinates are back in page space.
-
-    Tesseract may detect multiple physical lines inside a single Gemini-labeled
-    region (uncommon but possible); we return them all so nothing is lost.
-    """
-    # Pad a few pixels so we don't clip characters at the edges of Gemini's
-    # detected box; Tesseract benefits from a small surrounding margin.
+def _tesseract_words_for_line(
+    page_image, line_box: PixelBox, settings: Settings
+) -> list[OcrWord]:
+    """OCR a small crop around ``line_box`` and return Tesseract's per-word boxes
+    in page coordinates (PSM 7, since Gemini already isolated one line)."""
+    # Pad a few pixels so we don't clip characters at the edges of Gemini's box.
     pad = 4
     x0 = max(0, line_box.x0 - pad)
     y0 = max(0, line_box.y0 - pad)
@@ -160,16 +151,12 @@ def _tesseract_line_from_crop(
     if x1 - x0 < 2 or y1 - y0 < 2:
         return []
     crop = page_image.crop((x0, y0, x1, y1))
-    try:
-        # PSM 7 = "single line"; appropriate when Gemini has already isolated
-        # one line for us.
-        return tesseract_client.transcribe_region(
-            crop, lang=settings.tesseract_language, psm=7, offset=(x0, y0)
-        )
-    except Exception:
-        # If Tesseract chokes on this region, keep going with no output for
-        # this line rather than killing the whole page.
-        return []
+    words: list[OcrWord] = []
+    for tl in tesseract_client.transcribe_region(
+        crop, lang=settings.tesseract_language, psm=7, offset=(x0, y0)
+    ):
+        words.extend(tl.words or [])
+    return words
 
 
 def process_file(
@@ -205,9 +192,12 @@ def process_file(
     (out_dir / txt_name).write_text(txt, "utf-8")
 
     content = settings.content_type or "handwriting"
-    mode_label = (
-        content if content in ("text", "mixed") else f"{content}/{settings.mode}"
-    )
+    if content == "text":
+        mode_label = "text"
+    else:
+        mode_label = f"{content}/{settings.mode}"
+        if settings.refine_word_boxes:
+            mode_label += "+wordboxes"
     hocr_bytes = build_hocr(
         page_results,
         ocr_system=f"CursBreaker ({mode_label})",

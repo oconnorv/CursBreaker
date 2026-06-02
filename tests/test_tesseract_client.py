@@ -1,8 +1,36 @@
+import sys
+import types
+
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from cursbreaker import tesseract_client
+from cursbreaker.config import Settings
 from cursbreaker.models import PixelBox, TranscribedLine
+
+
+def _install_fake_pytesseract(
+    monkeypatch, *, version="5.3.0", langs=("eng",), version_error=None
+):
+    """Install a stand-in ``pytesseract`` module so tests need no real engine."""
+    mod = types.ModuleType("pytesseract")
+
+    class TesseractNotFoundError(Exception):
+        pass
+
+    mod.TesseractNotFoundError = TesseractNotFoundError
+    mod.pytesseract = types.SimpleNamespace(tesseract_cmd="tesseract")
+
+    def get_tesseract_version():
+        if version_error is not None:
+            raise version_error
+        return version
+
+    mod.get_tesseract_version = get_tesseract_version
+    mod.get_languages = lambda config="": list(langs)
+    monkeypatch.setitem(sys.modules, "pytesseract", mod)
+    tesseract_client._PROBE_CACHE.clear()
+    return mod
 
 
 def _printed_page(size=(800, 200), lines=("Hello world", "Second line here")):
@@ -72,17 +100,206 @@ def test_transcribe_region_offsets_coordinates():
     assert min_x >= 20
 
 
-def test_require_available_raises_when_missing(monkeypatch):
-    # Force the availability probe to say "no" and confirm the error message
-    # mentions installation steps so the user knows what to do.
-    monkeypatch.setattr(tesseract_client, "is_available", lambda: False)
-    with pytest.raises(RuntimeError) as excinfo:
+def test_status_wrapper_missing(monkeypatch):
+    # `import pytesseract` failing must be reported as a *wrapper* problem,
+    # not sent down the "install the engine" path.
+    monkeypatch.setitem(sys.modules, "pytesseract", None)
+    tesseract_client._PROBE_CACHE.clear()
+    st = tesseract_client.status(force=True)
+    assert st.wrapper_present is False
+    assert st.installed is False
+    assert "pytesseract" in (st.error or "")
+
+
+def test_status_binary_missing(monkeypatch):
+    # Wrapper present, but the engine version probe fails -> *binary* problem.
+    _install_fake_pytesseract(monkeypatch, version_error=RuntimeError("nope"))
+    st = tesseract_client.status(force=True)
+    assert st.wrapper_present is True
+    assert st.binary_found is False
+    assert st.installed is False
+    assert st.error and "engine not found" in st.error.lower()
+
+
+def test_status_ok_reports_version_and_languages(monkeypatch):
+    _install_fake_pytesseract(monkeypatch, version="5.3.1", langs=("eng", "fra"))
+    st = tesseract_client.status(force=True)
+    assert st.installed is True and st.binary_found is True
+    assert st.version == "5.3.1"
+    assert "eng" in st.languages and "fra" in st.languages
+
+
+def test_resolve_explicit_cmd_override_from_env(monkeypatch):
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.setenv("TESSERACT_CMD", "/custom/path/tesseract")
+    assert tesseract_client.resolve_tesseract() == "/custom/path/tesseract"
+    assert fake.pytesseract.tesseract_cmd == "/custom/path/tesseract"
+
+
+def test_resolve_explicit_cmd_override_from_setting(monkeypatch):
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    resolved = tesseract_client.resolve_tesseract(
+        Settings(tesseract_cmd="/from/settings/tesseract")
+    )
+    assert resolved == "/from/settings/tesseract"
+    assert fake.pytesseract.tesseract_cmd == "/from/settings/tesseract"
+
+
+def test_candidate_binaries_cover_each_os():
+    win = tesseract_client._candidate_binaries("win32")
+    assert any(c.endswith(r"Tesseract-OCR\tesseract.exe") for c in win)
+    assert "/opt/homebrew/bin/tesseract" in tesseract_client._candidate_binaries("darwin")
+    assert "/usr/bin/tesseract" in tesseract_client._candidate_binaries("linux")
+
+
+def test_candidate_binaries_prefer_noadmin_locations_first():
+    # The bundled engine and the user-managed (portable) folder must come before
+    # any install location -- they need no administrator rights.
+    cands = tesseract_client._candidate_binaries("linux")
+    managed = str(tesseract_client._managed_dir() / "tesseract")
+    assert cands[0].endswith("tesseract")  # app bundle
+    assert cands[1] == managed             # portable drop-in folder
+    assert cands.index(managed) < cands.index("/usr/bin/tesseract")
+
+
+def test_candidate_binaries_include_per_user_windows_location(monkeypatch):
+    # A per-user (winget / non-admin) install lives under %LOCALAPPDATA% and
+    # must be probed before the machine-wide Program Files locations.
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+    cands = tesseract_client._candidate_binaries("win32")
+    # Separator-insensitive: pathlib emits '\' on real Windows but '/' when this
+    # path is constructed on a POSIX test host, so normalize before comparing.
+    norm = [c.replace("\\", "/") for c in cands]
+    per_user = "C:/Users/me/AppData/Local/Programs/Tesseract-OCR/tesseract.exe"
+    machine = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+    assert per_user in norm
+    assert norm.index(per_user) < norm.index(machine)
+
+
+def test_resolve_prefers_managed_portable_build(monkeypatch):
+    # With no install present, a portable build in the managed folder wins and
+    # is reported with source="managed".
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    managed_exe = str(tesseract_client._managed_dir() / "tesseract")
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: p == managed_exe)
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.cmd_path == managed_exe
+    assert st.source == "managed"
+    assert fake.pytesseract.tesseract_cmd == managed_exe
+
+
+def test_status_reports_source_and_managed_dir(monkeypatch):
+    # source classification + the drop-in folder are surfaced for the UI.
+    _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: False)
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.source == "path"  # fell through to PATH ("tesseract")
+    assert st.managed_dir and st.managed_dir.endswith("tesseract")
+
+
+def test_binary_missing_error_mentions_noadmin_dropin(monkeypatch):
+    # The actionable error must tell a non-admin user where to drop a portable
+    # build, not only how to run an installer.
+    _install_fake_pytesseract(monkeypatch, version_error=RuntimeError("nope"))
+    st = tesseract_client.status(Settings(), force=True)
+    assert st.error
+    assert "admin" in st.error.lower()
+    assert st.managed_dir in st.error
+
+
+def test_resolve_uses_windows_well_known_path(monkeypatch):
+    # Prove the Windows branch is selected even though the test host is Linux.
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    win_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    monkeypatch.setattr(
+        tesseract_client,
+        "_candidate_binaries",
+        lambda platform=None: [r"X:\bundled\tesseract.exe", win_path],
+    )
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: p == win_path)
+    assert tesseract_client.resolve_tesseract() == win_path
+    assert fake.pytesseract.tesseract_cmd == win_path
+
+
+def test_resolve_falls_back_to_path_when_nothing_found(monkeypatch):
+    # The universal fallback: pytesseract's own PATH lookup ("tesseract").
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: False)
+    assert tesseract_client.resolve_tesseract(Settings()) == "tesseract"
+    assert fake.pytesseract.tesseract_cmd == "tesseract"
+
+
+def test_status_caches_probe_until_forced(monkeypatch):
+    fake = _install_fake_pytesseract(monkeypatch)
+    monkeypatch.setattr(tesseract_client, "_is_file", lambda p: False)
+    calls = {"n": 0}
+    base = fake.get_tesseract_version
+
+    def counting():
+        calls["n"] += 1
+        return base()
+
+    fake.get_tesseract_version = counting
+    tesseract_client._PROBE_CACHE.clear()
+    tesseract_client.status(Settings())
+    tesseract_client.status(Settings())
+    assert calls["n"] == 1  # second read served from the cache
+    tesseract_client.status(Settings(), force=True)
+    assert calls["n"] == 2
+
+
+def test_require_available_message_for_missing_wrapper(monkeypatch):
+    monkeypatch.setattr(
+        tesseract_client,
+        "status",
+        lambda settings=None: tesseract_client.TesseractStatus(
+            wrapper_present=False,
+            error="The 'pytesseract' Python package is not installed.",
+        ),
+    )
+    with pytest.raises(RuntimeError) as e:
         tesseract_client.require_available()
-    msg = str(excinfo.value).lower()
-    assert "tesseract" in msg and "install" in msg
+    assert "pytesseract" in str(e.value)
+
+
+def test_require_available_message_for_missing_binary(monkeypatch):
+    monkeypatch.setattr(
+        tesseract_client,
+        "status",
+        lambda settings=None: tesseract_client.TesseractStatus(
+            wrapper_present=True,
+            binary_found=False,
+            cmd_path="/x/tesseract",
+            error="Tesseract OCR engine not found (looked for '/x/tesseract').",
+        ),
+    )
+    with pytest.raises(RuntimeError) as e:
+        tesseract_client.require_available()
+    assert "/x/tesseract" in str(e.value)
 
 
 def test_transcribed_line_words_field_is_optional():
     # Existing call sites that don't pass `words` must keep working.
     line = TranscribedLine(text="hi", box=PixelBox(x0=0, y0=0, x1=10, y1=10))
     assert line.words is None
+
+
+def test_spec_bundles_engine_under_cursbreaker_app_root():
+    """The PyInstaller spec must copy the Tesseract engine + tessdata UNDER
+    ``cursbreaker/`` so the frozen resolver (``_app_root()`` ==
+    ``sys._MEIPASS/cursbreaker``) can find them. Guards against regressing to a
+    top-level ``tesseract``/``tessdata`` dest, which ships the engine but leaves
+    it undetectable (a real bug caught in review)."""
+    from pathlib import Path
+
+    spec = (Path(__file__).resolve().parents[1] / "packaging" / "cursbreaker.spec").read_text()
+    assert '"cursbreaker/tesseract"' in spec          # binary + DLLs
+    assert '"cursbreaker/tesseract/tessdata"' in spec  # language data beside it
+    # The top-level destinations the resolver can't see must NOT appear.
+    assert ', "tesseract")' not in spec
+    assert ', "tessdata")' not in spec

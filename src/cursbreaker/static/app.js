@@ -22,7 +22,7 @@ async function api(method, url, body) {
 // ---- settings ----------------------------------------------------------- //
 const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
 const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution", "tesseract_language"];
-const BOOL = ["use_mock", "preprocess"];
+const BOOL = ["use_mock", "preprocess", "refine_word_boxes"];
 
 function gatherSettings() {
   const s = {};
@@ -64,6 +64,26 @@ function applyKeyStatus(data) {
   }
 }
 
+// Free, proactive check that a stored key still works. ListModels costs no
+// generation tokens/quota, so a revoked/expired key is caught here in Settings
+// instead of failing mid-transcription. Only "valid"/"invalid" change the
+// badge; "unknown" (offline/transient) and "no_key"/"mock" leave it untouched.
+async function verifyKey() {
+  let data;
+  try { data = await api("GET", "/api/key-status"); }
+  catch (e) { return; } // our own server unreachable — leave the local badge
+  const badge = $("key-status");
+  const info = $("key-info");
+  if (data.state === "valid") {
+    badge.textContent = "Key valid"; badge.className = "badge ok";
+  } else if (data.state === "invalid") {
+    badge.textContent = "Key rejected"; badge.className = "badge warn";
+    info.className = "key-info warn";
+    info.innerHTML =
+      `<span class="glyph">!</span><span>${escapeHtml(data.message)} Transcription will fail until you paste a current key.</span>`;
+  }
+}
+
 async function loadSettings() {
   const s = await api("GET", "/api/settings");
   for (const id of [...TEXT, ...NUMERIC]) if (s[id] !== undefined) $(id).value = s[id];
@@ -73,6 +93,7 @@ async function loadSettings() {
   const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
   if (ctRadio) ctRadio.checked = true;
   applyKeyStatus(s);
+  verifyKey(); // background-verify the stored key (no-op when none/mock)
 }
 
 async function loadTesseractStatus() {
@@ -88,12 +109,29 @@ async function loadTesseractStatus() {
   if (data.available) {
     info.className = "key-info";
     const langs = (data.languages || []).join(", ") || "eng";
+    const ver = data.version ? ` v${escapeHtml(data.version)}` : "";
+    const SOURCE_NOTE = {
+      bundled: " (bundled with CursBreaker)",
+      managed: " (portable build in your CursBreaker folder)",
+    };
+    const src = SOURCE_NOTE[data.source] || "";
     info.innerHTML =
-      `<span class="glyph">✓</span><span>Tesseract installed &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
+      `<span class="glyph">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
   } else {
     info.className = "key-info warn";
+    let detail;
+    if (data.wrapper_present === false) {
+      detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+    } else {
+      const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
+      // No-admin path: a portable build dropped into the app-managed folder.
+      const portable = data.managed_dir
+        ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
+        : "";
+      detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+    }
     info.innerHTML =
-      `<span class="glyph">!</span><span>Tesseract not detected. Install it (Linux: <span class="mono">apt install tesseract-ocr</span>; macOS: <span class="mono">brew install tesseract</span>; Windows: UB-Mannheim installer) to use Mixed or Printed-only modes. Handwriting mode still works as usual.</span>`;
+      `<span class="glyph">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
   }
   // Populate the language datalist with whatever's actually installed.
   const dl = $("tesseract-langs");
@@ -144,6 +182,13 @@ async function uploadFiles(fileList) {
   }
 }
 
+// The action note doubles as a transient status/error line. This is its
+// resting state -- a summary of what's staged -- restored whenever a transient
+// message (e.g. a prior "no API key" error) should be cleared.
+function stagedStatus() {
+  return staged.length ? `${staged.length} file(s) ready` : "";
+}
+
 function renderStaged() {
   const ul = $("staged");
   ul.innerHTML = "";
@@ -157,12 +202,15 @@ function renderStaged() {
     ul.appendChild(li);
   }
   $("transcribe").disabled = staged.length === 0;
-  $("action-note").textContent = staged.length ? `${staged.length} file(s) ready` : "";
+  $("action-note").textContent = stagedStatus();
 }
 
 // ---- processing --------------------------------------------------------- //
 async function transcribe() {
   if (!staged.length) return;
+  // Drop any leftover error (e.g. a prior "no API key") so it can't linger
+  // through this run.
+  $("action-note").textContent = stagedStatus();
   // Free up screen space the moment work starts so progress + results land
   // above the fold on smaller laptops.
   const sd = $("settings-details");
@@ -255,7 +303,13 @@ function escapeHtml(s) {
 }
 
 function wire() {
-  $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => { $("api_key").value = ""; });
+  $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => {
+    $("api_key").value = "";
+    // A freshly-saved key invalidates any prior "no API key" transcription
+    // error, so clear that stale message immediately.
+    $("action-note").textContent = stagedStatus();
+    verifyKey(); // confirm the just-pasted key actually works (free check)
+  });
   $("clear-key").onclick = async () => {
     if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;
     await api("DELETE", "/api/settings/api_key");

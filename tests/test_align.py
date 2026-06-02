@@ -1,9 +1,74 @@
-from cursbreaker.align import align_lines, sort_for_reading_order
-from cursbreaker.models import LineBox
+from cursbreaker.align import align_lines, align_words, sort_for_reading_order
+from cursbreaker.models import LineBox, OcrWord, PixelBox
 
 
 def _box(text, ymin):
     return LineBox(text=text, box_2d=[ymin, 50, ymin + 30, 950])
+
+
+def _word(text, x0, x1, y0=10, y1=40):
+    return OcrWord(text=text, box=PixelBox(x0=x0, y0=y0, x1=x1, y1=y1))
+
+
+_LINE = PixelBox(x0=0, y0=10, x1=300, y1=40)
+
+
+def test_align_words_adopts_boxes_where_text_matches():
+    # Every gold word matches a Tesseract word -> all adopt the real boxes and
+    # the matched confidence, and the text stays the gold text.
+    ocr = [_word("Cause", 10, 60), _word("of", 70, 95), _word("Death", 100, 180)]
+    out = align_words(
+        "Cause of Death", ocr, _LINE, matched_conf=95, fallback_conf=60
+    )
+    assert [w.text for w in out] == ["Cause", "of", "Death"]
+    assert [(w.box.x0, w.box.x1) for w in out] == [(10, 60), (70, 95), (100, 180)]
+    assert all(w.confidence == 95 for w in out)
+
+
+def test_align_words_keeps_gemini_word_when_tesseract_misreads():
+    # Tesseract misreads the last word; we keep Gemini's spelling, do NOT adopt
+    # the mismatched box (synthesize instead), and flag it with fallback conf.
+    ocr = [_word("Cause", 10, 60), _word("of", 70, 95), _word("Prummonia", 100, 250)]
+    out = align_words(
+        "Cause of Pneumonia", ocr, _LINE, matched_conf=95, fallback_conf=60
+    )
+    assert [w.text for w in out] == ["Cause", "of", "Pneumonia"]
+    assert out[0].confidence == 95 and out[1].confidence == 95
+    assert out[2].confidence == 60  # synthesized, not Tesseract's box
+    # The synthesized word sits after its matched neighbour and within the line.
+    assert out[2].box.x0 >= out[1].box.x1
+    assert out[2].box.x1 <= _LINE.x1
+
+
+def test_align_words_preserves_every_gold_word_and_order():
+    # Counts differ and an extra gold word has no match: nothing is dropped.
+    ocr = [_word("the", 10, 40), _word("quick", 50, 120)]
+    out = align_words(
+        "the quick brown fox", ocr, _LINE, matched_conf=95, fallback_conf=60
+    )
+    assert [w.text for w in out] == ["the", "quick", "brown", "fox"]
+
+
+def test_align_words_ignores_extra_tesseract_words():
+    # Tesseract hallucinates a trailing word; it must not appear in the output.
+    ocr = [_word("hello", 10, 90), _word("world", 100, 190), _word("XX", 200, 230)]
+    out = align_words("hello world", ocr, _LINE, matched_conf=95, fallback_conf=60)
+    assert [w.text for w in out] == ["hello", "world"]
+
+
+def test_align_words_no_ocr_synthesizes_all_within_line():
+    out = align_words("alpha beta", [], _LINE, matched_conf=95, fallback_conf=60)
+    assert [w.text for w in out] == ["alpha", "beta"]
+    assert all(w.confidence == 60 for w in out)
+    assert all(_LINE.x0 <= w.box.x0 < w.box.x1 <= _LINE.x1 for w in out)
+
+
+def test_align_words_matches_despite_punctuation_and_case():
+    ocr = [_word("DEATH,", 10, 90)]
+    out = align_words("Death", ocr, _LINE, matched_conf=95, fallback_conf=60)
+    assert out[0].text == "Death"  # gold spelling/case kept
+    assert out[0].confidence == 95  # but matched on normalized form
+    assert (out[0].box.x0, out[0].box.x1) == (10, 90)
 
 
 def test_sort_for_reading_order_is_column_major():

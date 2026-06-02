@@ -5,10 +5,16 @@ from PIL import Image, ImageDraw
 
 @pytest.fixture(autouse=True)
 def isolated_config(tmp_path, monkeypatch):
-    """Keep tests away from the real user config and any ambient API keys."""
+    """Keep tests away from the real user config and any ambient API keys or
+    Tesseract overrides, and start each test with a clean detection cache."""
     monkeypatch.setenv("CURSBREAKER_CONFIG", str(tmp_path / "settings.json"))
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    monkeypatch.delenv("TESSDATA_PREFIX", raising=False)
+    from cursbreaker import tesseract_client
+
+    tesseract_client._PROBE_CACHE.clear()
 
 
 @pytest.fixture

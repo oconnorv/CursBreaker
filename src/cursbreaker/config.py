@@ -39,14 +39,24 @@ class Settings(BaseModel):
 
     # --- Pipeline ---
     # Content type chooses which engine(s) run per page:
-    #   handwriting -> Gemini only (existing recipe).
+    #   handwriting -> Gemini transcribes the whole page (printed + handwritten);
+    #                  its transcription is always the authoritative text.
     #   text        -> Tesseract only; no API call.
-    #   mixed       -> Gemini classifies each line printed/handwritten, then
-    #                  printed lines go to Tesseract (real per-word boxes) and
-    #                  handwritten lines use Gemini transcription. Outputs are
-    #                  merged in our code -- Gemini never sees Tesseract's text.
-    content_type: str = "handwriting"  # handwriting | text | mixed
+    # ("mixed" was retired -- it let Tesseract's text degrade the output. Its
+    # replacement is handwriting with ``refine_word_boxes`` on; see
+    # ``normalize_content``.)
+    content_type: str = "handwriting"  # handwriting | text
+    # When True (and Tesseract is available), refine per-word *positions* on the
+    # Gemini transcription using Tesseract's real word boxes -- adopted only
+    # where Tesseract's text agrees with Gemini's. Tesseract text is never
+    # emitted, so this improves word location without ever changing what was
+    # transcribed. Off by default (adds local OCR work; needs Tesseract).
+    refine_word_boxes: bool = False
     tesseract_language: str = "eng"  # any 3-letter code installed locally
+    # Optional explicit path to the tesseract binary. "" = auto-detect (bundled
+    # binary, well-known locations, then PATH). Overridable by the TESSERACT_CMD
+    # environment variable, the same way the API key can come from the env.
+    tesseract_cmd: str = ""
     mode: str = "two_pass"  # two_pass | one_pass (handwriting flow)
     pdf_dpi: int = 300
     max_dimension: int = 0  # 0 = keep original size; else resize longest side
@@ -74,6 +84,12 @@ class Settings(BaseModel):
             data["api_key_source"] = "config"
         else:
             data["api_key_source"] = None
+        if os.environ.get("TESSERACT_CMD"):
+            data["tesseract_cmd_source"] = "env"
+        elif self.tesseract_cmd:
+            data["tesseract_cmd_source"] = "config"
+        else:
+            data["tesseract_cmd_source"] = None
         return data
 
     def resolved_api_key(self) -> str:
@@ -82,6 +98,21 @@ class Settings(BaseModel):
             or os.environ.get("GOOGLE_API_KEY")
             or self.api_key
         )
+
+    def resolved_tesseract_cmd(self) -> str:
+        """Path to the tesseract binary: env override first, then the setting."""
+        return os.environ.get("TESSERACT_CMD") or self.tesseract_cmd
+
+    def normalize_content(self) -> "Settings":
+        """Migrate the retired 'mixed' content type in place.
+
+        'Mixed' meant "Gemini text plus Tesseract"; that is now Handwriting with
+        ``refine_word_boxes`` enabled. Idempotent; returns ``self`` for chaining
+        so callers can ``load(...).normalize_content()``."""
+        if self.content_type == "mixed":
+            self.content_type = "handwriting"
+            self.refine_word_boxes = True
+        return self
 
 
 def config_path() -> Path:
@@ -95,7 +126,7 @@ def load_settings() -> Settings:
     path = config_path()
     if path.exists():
         try:
-            return Settings.model_validate_json(path.read_text("utf-8"))
+            return Settings.model_validate_json(path.read_text("utf-8")).normalize_content()
         except Exception:
             # A corrupt config should never brick the app; fall back to defaults.
             return Settings()

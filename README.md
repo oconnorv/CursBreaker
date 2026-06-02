@@ -81,8 +81,23 @@ brew install tesseract
 #   https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
-The Settings panel shows a green/red status badge for Tesseract and lists the
-language packs it can see (install e.g. `tesseract-ocr-fra` to add French).
+The Python wrapper (`pytesseract`) ships as a dependency, so you only need the
+engine itself. The Settings panel shows a status badge that names *which* piece
+is missing if detection fails and lists the language packs it can see (install
+e.g. `tesseract-ocr-fra` to add French).
+
+If the engine is installed but not on your `PATH` (common on Windows, where the
+UB-Mannheim installer doesn't always add it), point CursBreaker straight at it
+by setting the `TESSERACT_CMD` environment variable to the full path of the
+`tesseract` executable, e.g.:
+
+```bash
+# Windows (PowerShell)
+$env:TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+```
+
+CursBreaker also auto-checks the well-known install locations on each OS, so in
+most cases no override is needed.
 
 ## Get a Gemini API key
 
@@ -163,6 +178,12 @@ A starter GitHub Actions workflow (`.github/workflows/build.yml`) builds
 standalone executables for Windows, macOS and Linux with PyInstaller on tagged
 releases. It still needs a real CI run to validate per-OS bundling of the
 static UI assets.
+
+Bundling the **Tesseract engine** itself into those executables — so end users
+need zero separate install — is explored in
+[`docs/bundling-tesseract.md`](docs/bundling-tesseract.md). The binary-detection
+code already looks for a bundled engine first, so shipping it is a packaging
+change rather than an app-code change.
 
 ## Credits & license
 

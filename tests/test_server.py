@@ -143,20 +143,44 @@ def test_tesseract_status_endpoint_reports_availability():
     body = r.json()
     assert "available" in body and isinstance(body["available"], bool)
     assert "languages" in body and isinstance(body["languages"], list)
+    # Richer diagnostics so the UI can explain *which* piece is missing.
+    for key in ("wrapper_present", "binary_found", "cmd_path", "version",
+                "error", "install_hint"):
+        assert key in body
+    assert isinstance(body["wrapper_present"], bool)
+    assert isinstance(body["binary_found"], bool)
 
 
 def test_content_type_round_trips_through_settings_api():
-    r = client.post("/api/settings", json={"content_type": "mixed", "tesseract_language": "eng"}).json()
-    assert r["content_type"] == "mixed"
+    r = client.post(
+        "/api/settings", json={"content_type": "handwriting", "tesseract_language": "eng"}
+    ).json()
+    assert r["content_type"] == "handwriting"
     assert r["tesseract_language"] == "eng"
+
+
+def test_refine_word_boxes_round_trips_through_settings_api():
+    r = client.post("/api/settings", json={"refine_word_boxes": True}).json()
+    assert r["refine_word_boxes"] is True
+
+
+def test_legacy_mixed_content_type_migrates_to_handwriting_plus_refine():
+    # "mixed" was retired; posting it (e.g. from an old client) must migrate to
+    # the handwriting flow with word-box refinement on, not persist "mixed".
+    r = client.post("/api/settings", json={"content_type": "mixed"}).json()
+    assert r["content_type"] == "handwriting"
+    assert r["refine_word_boxes"] is True
 
 
 def test_index_has_content_type_selector_and_tesseract_status():
     html = client.get("/").text
-    # Three content-type radios are present.
+    # The two content-type radios are present; "mixed" was retired in favor of
+    # the refine-word-positions toggle.
     assert 'name="content_type"' in html
-    for v in ("handwriting", "mixed", "text"):
+    for v in ("handwriting", "text"):
         assert f'value="{v}"' in html
+    assert 'value="mixed"' not in html
+    assert 'id="refine_word_boxes"' in html
     # A visible status block + a place to pick a Tesseract language.
     assert 'id="tesseract-info"' in html
     assert 'id="tesseract_language"' in html
@@ -284,3 +308,29 @@ def test_access_log_filter_drops_heartbeat_keeps_others():
         if getattr(f, "_cursbreaker_heartbeat", False)
     )
     assert before == after == 1
+
+
+def test_key_status_no_key_by_default():
+    # Fresh isolated config + cleared env -> nothing stored.
+    assert client.get("/api/key-status").json()["state"] == "no_key"
+
+
+def test_key_status_mock_when_demo_mode():
+    client.post("/api/settings", json={"use_mock": True})
+    assert client.get("/api/key-status").json()["state"] == "mock"
+
+
+def test_key_status_reports_invalid_revoked_key(monkeypatch):
+    from cursbreaker import gemini_client
+
+    monkeypatch.setenv("GEMINI_API_KEY", "revoked-key")
+
+    def boom(key):
+        e = Exception("400 API key not valid. Please pass a valid API key.")
+        e.code = 400
+        raise e
+
+    monkeypatch.setattr(gemini_client, "_probe_models", boom)
+    r = client.get("/api/key-status").json()
+    assert r["state"] == "invalid"
+    assert r["message"]

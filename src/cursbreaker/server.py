@@ -71,6 +71,7 @@ async def update_settings(payload: dict):
                 settings.api_key = value
         elif key in fields:
             setattr(settings, key, value)
+    settings.normalize_content()  # migrate a posted legacy "mixed" value
     save_settings(settings)
     return settings.public_dict()
 
@@ -85,14 +86,34 @@ def clear_api_key():
 
 @app.get("/api/tesseract")
 def tesseract_status():
-    """Whether Tesseract is callable here, plus the installed languages."""
+    """Detailed Tesseract status: which piece (if any) is missing and where we
+    looked, so the UI can offer a fix specific to the actual failure."""
     from . import tesseract_client
 
-    available = tesseract_client.is_available()
+    st = tesseract_client.status(load_settings(), force=True)
     return {
-        "available": available,
-        "languages": tesseract_client.available_languages() if available else [],
+        "available": st.installed,  # kept for back-compat with older clients
+        "languages": st.languages,
+        "wrapper_present": st.wrapper_present,
+        "binary_found": st.binary_found,
+        "cmd_path": st.cmd_path,
+        "source": st.source,
+        "version": st.version,
+        "error": st.error,
+        "install_hint": st.install_hint,
+        "managed_dir": st.managed_dir,
     }
+
+
+@app.get("/api/key-status")
+def key_status():
+    """Cheap, generation-free check that the stored Gemini key still works, so a
+    revoked/expired key surfaces in Settings before a transcription fails. Uses
+    the free ListModels endpoint (no token/quota cost)."""
+    from .gemini_client import check_api_key
+
+    st = check_api_key(load_settings())
+    return {"state": st.state, "message": st.message}
 
 
 @app.get("/api/models")

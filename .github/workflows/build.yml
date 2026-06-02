@@ -1,12 +1,23 @@
 name: build
 
 on:
+  pull_request:
   push:
     tags: ["v*"]
   workflow_dispatch:
 
+# If new commits land on the same PR/branch, cancel the older in-progress run
+# instead of letting duplicate CI runs pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   binaries:
+    # Heavy cross-platform packaging build: run on release tags or a manual
+    # dispatch, not on every PR push. Use the Actions "Run workflow" button to
+    # build/validate the bundle (incl. the Windows engine) on demand.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +28,56 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install Tesseract engine (Windows, for bundling)
+        # Phase 1: the Windows artifact ships the engine inside the .exe so end
+        # users need no separate, admin-requiring install. The spec copies the
+        # engine from this install into the bundle; on a runner without it the
+        # build still succeeds but ships no engine.
+        if: runner.os == 'Windows'
+        run: choco install --no-progress -y tesseract
+      - name: Bundle Tesseract language data (Windows)
+        # Bundle the languages common in ~1700-onward Western records (the
+        # primary use case) so a foreign-language printed doc doesn't break local
+        # OCR -- intentionally not a user option. (Handwriting/Gemini mode reads
+        # any language regardless; this only affects the local Tesseract path.)
+        # eng + osd already ship with the choco install; tessdata_fast keeps each
+        # pack small. Edit $langs to add/remove. Resilient: a failed download is
+        # skipped (with a warning), never failing the release build.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tessdata = "C:\Program Files\Tesseract-OCR\tessdata"
+          $base = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          $langs = @(
+            # Western & Southern European
+            "fra","deu","spa","ita","por","nld",
+            # Latin + German Fraktur -- still the norm in 1700+ church, legal,
+            # and printed German records; Fraktur persisted into the 1940s.
+            "lat","frk",
+            # Nordic
+            "dan","swe","nor","fin",
+            # Central European
+            "pol","ces","hun",
+            # Eastern European & Greek
+            "rus","ukr","ell",
+            # Hebrew -- Jewish genealogy / Hebrew-script records
+            "heb"
+          )
+          $failed = @()
+          foreach ($l in $langs) {
+            $ok = $false
+            for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
+              try {
+                Invoke-WebRequest -Uri "$base/$l.traineddata" `
+                  -OutFile "$tessdata\$l.traineddata" -UseBasicParsing -TimeoutSec 60
+                $ok = $true
+              } catch { Start-Sleep -Seconds 2 }
+            }
+            if (-not $ok) { $failed += $l }
+          }
+          $have = (Get-ChildItem "$tessdata\*.traineddata" | Measure-Object).Count
+          Write-Host "tessdata now holds $have language pack(s)."
+          if ($failed.Count -gt 0) { Write-Warning "Could not download: $($failed -join ', ')" }
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -35,7 +96,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: |
+      - name: Install Tesseract engine
+        # The engine binary lets the Printed-mode and word-box-refinement tests
+        # run instead of skipping; without it the OCR-dependent cases skip.
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+      - name: Install
+        run: |
           python -m pip install --upgrade pip
           pip install .[dev]
-          pytest -q
+      - name: Smoke-check imports
+        # Catch dependency/packaging breakage (e.g. a missing native wheel)
+        # before it reaches users: the *real* Gemini path must import, not just
+        # the mock-driven tests. This is the failure class the test suite misses
+        # because it never imports the live SDK.
+        run: python -c "import cursbreaker; from google import genai; print('imports OK')"
+      - name: Run tests
+        run: pytest -q
