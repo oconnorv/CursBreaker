@@ -1,0 +1,36 @@
+# Tesseract language packs bundled with CursBreaker (one ISO code per line).
+#
+# Single source of truth: the build CI downloads these into the engine's
+# tessdata, and the PyInstaller spec ships exactly these (when present). Focused
+# on records from ~1700 onward. eng/osd ship from the engine install itself
+# (kept as-is so English stays high-accuracy rather than the smaller "fast" pack).
+#
+# Note: Handwriting / Gemini mode reads any language regardless -- this list only
+# affects the local Tesseract path (Printed-only and word-box refinement).
+eng
+osd
+# Western & Southern European
+fra
+deu
+spa
+ita
+por
+nld
+# Latin + German Fraktur (1700+ church, legal, and printed German records)
+lat
+frk
+# Nordic
+dan
+swe
+nor
+fin
+# Central European
+pol
+ces
+hun
+# Eastern European & Greek
+rus
+ukr
+ell
+# Hebrew (Jewish genealogy / Hebrew-script records)
+heb

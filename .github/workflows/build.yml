@@ -28,56 +28,83 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install Tesseract engine (Windows, for bundling)
-        # Phase 1: the Windows artifact ships the engine inside the .exe so end
-        # users need no separate, admin-requiring install. The spec copies the
-        # engine from this install into the bundle; on a runner without it the
-        # build still succeeds but ships no engine.
-        if: runner.os == 'Windows'
-        run: choco install --no-progress -y tesseract
-      - name: Bundle Tesseract language data (Windows)
-        # Bundle the languages common in ~1700-onward Western records (the
-        # primary use case) so a foreign-language printed doc doesn't break local
-        # OCR -- intentionally not a user option. (Handwriting/Gemini mode reads
-        # any language regardless; this only affects the local Tesseract path.)
-        # eng + osd already ship with the choco install; tessdata_fast keeps each
-        # pack small. Edit $langs to add/remove. Resilient: a failed download is
-        # skipped (with a warning), never failing the release build.
+      # --- Bundle the Tesseract engine + a default language set so end users
+      # need no separate, admin-requiring install. Languages come from
+      # packaging/bundled_languages.txt (single source of truth, also read by the
+      # spec). eng/osd ship from the engine install; the rest download from
+      # tessdata_fast. Downloads retry and tolerate failure (a flaky pack is
+      # skipped with a warning, never failing the release build). The Unix steps
+      # export the engine + tessdata locations for the spec; Windows uses the
+      # spec's default (Program Files) discovery.
+      - name: Bundle Tesseract engine + languages (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          choco install --no-progress -y tesseract
           $tessdata = "C:\Program Files\Tesseract-OCR\tessdata"
           $base = "https://github.com/tesseract-ocr/tessdata_fast/raw/main"
-          $langs = @(
-            # Western & Southern European
-            "fra","deu","spa","ita","por","nld",
-            # Latin + German Fraktur -- still the norm in 1700+ church, legal,
-            # and printed German records; Fraktur persisted into the 1940s.
-            "lat","frk",
-            # Nordic
-            "dan","swe","nor","fin",
-            # Central European
-            "pol","ces","hun",
-            # Eastern European & Greek
-            "rus","ukr","ell",
-            # Hebrew -- Jewish genealogy / Hebrew-script records
-            "heb"
-          )
+          $langs = Get-Content packaging/bundled_languages.txt |
+            ForEach-Object { ($_ -replace '#.*', '').Trim() } | Where-Object { $_ }
           $failed = @()
           foreach ($l in $langs) {
+            $out = "$tessdata\$l.traineddata"
+            if (Test-Path $out) { continue }   # keep the engine's own eng/osd
             $ok = $false
             for ($i = 0; $i -lt 3 -and -not $ok; $i++) {
               try {
-                Invoke-WebRequest -Uri "$base/$l.traineddata" `
-                  -OutFile "$tessdata\$l.traineddata" -UseBasicParsing -TimeoutSec 60
+                Invoke-WebRequest "$base/$l.traineddata" -OutFile $out -UseBasicParsing -TimeoutSec 60
                 $ok = $true
-              } catch { Start-Sleep -Seconds 2 }
+              } catch { Start-Sleep 2 }
             }
             if (-not $ok) { $failed += $l }
           }
-          $have = (Get-ChildItem "$tessdata\*.traineddata" | Measure-Object).Count
-          Write-Host "tessdata now holds $have language pack(s)."
-          if ($failed.Count -gt 0) { Write-Warning "Could not download: $($failed -join ', ')" }
+          Write-Host "tessdata holds $((Get-ChildItem "$tessdata\*.traineddata").Count) pack(s)."
+          if ($failed.Count) { Write-Warning "Could not download: $($failed -join ', ')" }
+      - name: Bundle Tesseract engine + languages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-osd
+          bin="$(command -v tesseract)"
+          tdir="$(dirname "$(find /usr/share /usr/local/share -name eng.traineddata 2>/dev/null | head -1)")"
+          echo "engine=$bin tessdata=$tdir"
+          base="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          failed=""
+          while read -r raw; do
+            l="$(echo "${raw%%#*}" | xargs)"; [ -z "$l" ] && continue
+            [ -f "$tdir/$l.traineddata" ] && continue
+            ok=""
+            for i in 1 2 3; do
+              sudo curl -fsSL "$base/$l.traineddata" -o "$tdir/$l.traineddata" && { ok=1; break; }
+              sleep 2
+            done
+            [ -z "$ok" ] && failed="$failed $l"
+          done < packaging/bundled_languages.txt
+          echo "tessdata holds $(ls "$tdir"/*.traineddata | wc -l) pack(s). failed:$failed"
+          echo "CURSBREAKER_TESSERACT_BIN=$bin" >> "$GITHUB_ENV"
+          echo "CURSBREAKER_TESSDATA_DIR=$tdir" >> "$GITHUB_ENV"
+      - name: Bundle Tesseract engine + languages (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install tesseract
+          bin="$(command -v tesseract)"
+          tdir="$(dirname "$(find /opt/homebrew/share /usr/local/share -name eng.traineddata 2>/dev/null | head -1)")"
+          echo "engine=$bin tessdata=$tdir"
+          base="https://github.com/tesseract-ocr/tessdata_fast/raw/main"
+          failed=""
+          while read -r raw; do
+            l="$(echo "${raw%%#*}" | xargs)"; [ -z "$l" ] && continue
+            [ -f "$tdir/$l.traineddata" ] && continue
+            ok=""
+            for i in 1 2 3; do
+              curl -fsSL "$base/$l.traineddata" -o "$tdir/$l.traineddata" && { ok=1; break; }
+              sleep 2
+            done
+            [ -z "$ok" ] && failed="$failed $l"
+          done < packaging/bundled_languages.txt
+          echo "tessdata holds $(ls "$tdir"/*.traineddata | wc -l) pack(s). failed:$failed"
+          echo "CURSBREAKER_TESSERACT_BIN=$bin" >> "$GITHUB_ENV"
+          echo "CURSBREAKER_TESSDATA_DIR=$tdir" >> "$GITHUB_ENV"
       - name: Install
         run: |
           python -m pip install --upgrade pip
