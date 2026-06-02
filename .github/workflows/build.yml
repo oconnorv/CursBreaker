@@ -52,7 +52,7 @@ jobs:
             # Western & Southern European
             "fra","deu","spa","ita","por","nld",
             # Latin + German Fraktur -- still the norm in 1700+ church, legal,
-            # and printed German records (Fraktur was used into the 1940s).
+            # and printed German records; Fraktur persisted into the 1940s.
             "lat","frk",
             # Nordic
             "dan","swe","nor","fin",
