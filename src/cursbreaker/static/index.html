@@ -4,13 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=7" />
-  <link rel="icon" type="image/x-icon" href="/static/favicon.png" />
+  <link rel="stylesheet" href="/static/styles.css?v=8" />
+  <link rel="icon" type="image/png" href="/static/favicon.png" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
   <header class="topbar">
     <div class="brand">
-      <span class="logo">CB</span>
+      <span class="logo" aria-hidden="true">CB</span>
       <div>
         <h1>CursBreaker</h1>
         <p class="tagline">Handwriting &rarr; searchable hOCR, powered by your Gemini key</p>
@@ -18,24 +20,26 @@
     </div>
   </header>
 
-  <main>
-    <section class="card" id="settings-card">
+  <main id="main" tabindex="-1">
+    <section class="card" id="settings-card" aria-labelledby="settings-heading">
       <details id="settings-details" open>
         <summary class="card-head settings-summary">
           <span class="chev" aria-hidden="true"></span>
-          <h2>Settings</h2>
+          <h2 id="settings-heading">Settings</h2>
           <span id="key-status" class="badge">checking&hellip;</span>
         </summary>
 
         <div class="settings-body">
           <div class="field">
-            <label for="api_key"><span>Gemini API key</span></label>
+            <label for="api_key">Gemini API key</label>
             <div class="row">
-              <input type="password" id="api_key" placeholder="Paste your key (stored locally on this machine)" autocomplete="off" />
+              <input type="password" id="api_key" placeholder="Paste your key" autocomplete="off"
+                     aria-describedby="api_key-hint" />
               <button id="save-key" class="btn small" type="button">Save key</button>
               <button id="clear-key" class="btn small" type="button">Clear</button>
             </div>
-            <div id="key-info" class="key-info" hidden></div>
+            <p id="api_key-hint" class="hint">Stored locally on this machine; sent only to Google's Gemini API, never anywhere else.</p>
+            <div id="key-info" class="key-info" role="status" aria-live="polite" hidden></div>
           </div>
 
           <label class="check">
@@ -48,7 +52,7 @@
             <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page (printed text included).</label>
             <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract OCRs locally; no Gemini call.</label>
           </fieldset>
-          <div id="tesseract-info" class="key-info" hidden></div>
+          <div id="tesseract-info" class="key-info" role="status" aria-live="polite" hidden></div>
 
           <fieldset class="field">
             <legend>Transcription mode <span class="muted">(handwriting flow)</span></legend>
@@ -99,47 +103,48 @@
       </details>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>Documents</h2></div>
+    <section class="card" aria-labelledby="documents-heading">
+      <div class="card-head"><h2 id="documents-heading">Documents</h2></div>
       <div id="dropzone" class="dropzone">
         <p><b>Drop image or PDF files here</b></p>
         <p class="muted">TIFF, JPEG, PNG, GIF, PDF &mdash; bulk import supported</p>
-        <button class="btn" id="browse">Browse files</button>
+        <button class="btn" id="browse" type="button">Browse files</button>
         <input type="file" id="file-input" multiple accept=".tif,.tiff,.jpg,.jpeg,.png,.gif,.pdf" hidden />
       </div>
-      <ul id="staged" class="staged"></ul>
+      <ul id="staged" class="staged" aria-label="Files ready to transcribe"></ul>
       <div class="actions">
-        <button id="transcribe" class="btn primary" disabled>Transcribe</button>
-        <span id="action-note" class="muted"></span>
+        <button id="transcribe" class="btn primary" type="button" disabled>Transcribe</button>
+        <span id="action-note" class="muted" role="status" aria-live="polite"></span>
       </div>
     </section>
 
-    <section class="card" id="progress-card" hidden>
-      <div class="card-head"><h2>Progress</h2></div>
-      <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
-      <p id="progress-text" class="muted"></p>
+    <section class="card" id="progress-card" aria-labelledby="progress-heading" hidden>
+      <div class="card-head"><h2 id="progress-heading">Progress</h2></div>
+      <div id="progress" class="progress" role="progressbar"
+           aria-labelledby="progress-heading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+      <p id="progress-text" class="muted" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="card" id="results-card" hidden>
+    <section class="card" id="results-card" aria-labelledby="results-heading" hidden>
       <div class="card-head">
-        <h2>Results</h2>
+        <h2 id="results-heading" tabindex="-1">Results</h2>
         <a id="zip-link" class="btn small" href="#">Download all (.zip)</a>
       </div>
       <div id="results"></div>
     </section>
   </main>
 
-  <div id="modal" class="modal" hidden>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-inner">
       <div class="modal-head">
-        <span id="modal-title"></span>
-        <button id="modal-close" class="btn small">Close</button>
+        <h2 id="modal-title" class="modal-title"></h2>
+        <button id="modal-close" class="btn small" type="button">Close</button>
       </div>
-      <div class="modal-body"><img id="modal-img" alt="page preview with detected line boxes" /></div>
+      <div class="modal-body"><img id="modal-img" alt="" /></div>
     </div>
-  </div>
-
-  <script src="/static/app.js?v=7"></script>
+  </dialog>
 
   <footer class="credits">
     Based on Mark Humphries' work at
@@ -149,5 +154,7 @@
     using
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
+
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

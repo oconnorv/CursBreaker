@@ -47,7 +47,7 @@ function applyKeyStatus(data) {
     badge.textContent = "Demo mode"; badge.className = "badge ok";
     info.className = "key-info";
     info.innerHTML =
-      `<span class="glyph">●</span><span>Demo mode is on — no real API call will be made.</span>`;
+      `<span class="glyph" aria-hidden="true">●</span><span>Demo mode is on — no real API call will be made.</span>`;
   } else if (data.api_key_set) {
     badge.textContent = "Key saved"; badge.className = "badge ok";
     info.className = "key-info";
@@ -55,12 +55,12 @@ function applyKeyStatus(data) {
       ? `from <span class="mono">GEMINI_API_KEY</span> environment variable`
       : "stored locally on this machine";
     info.innerHTML =
-      `<span class="glyph">✓</span><span>Gemini key ${where}: <span class="mono">${escapeHtml(data.api_key_hint || "")}</span></span>`;
+      `<span class="glyph" aria-hidden="true">✓</span><span>Gemini key ${where}: <span class="mono">${escapeHtml(data.api_key_hint || "")}</span></span>`;
   } else {
     badge.textContent = "No API key"; badge.className = "badge warn";
     info.className = "key-info warn";
     info.innerHTML =
-      `<span class="glyph">!</span><span>No Gemini key stored. Paste one above or set <span class="mono">GEMINI_API_KEY</span>.</span>`;
+      `<span class="glyph" aria-hidden="true">!</span><span>No Gemini key stored. Paste one above or set <span class="mono">GEMINI_API_KEY</span>.</span>`;
   }
 }
 
@@ -80,7 +80,7 @@ async function verifyKey() {
     badge.textContent = "Key rejected"; badge.className = "badge warn";
     info.className = "key-info warn";
     info.innerHTML =
-      `<span class="glyph">!</span><span>${escapeHtml(data.message)} Transcription will fail until you paste a current key.</span>`;
+      `<span class="glyph" aria-hidden="true">!</span><span>${escapeHtml(data.message)} Transcription will fail until you paste a current key.</span>`;
   }
 }
 
@@ -116,7 +116,7 @@ async function loadTesseractStatus() {
     };
     const src = SOURCE_NOTE[data.source] || "";
     info.innerHTML =
-      `<span class="glyph">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
+      `<span class="glyph" aria-hidden="true">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
   } else {
     info.className = "key-info warn";
     let detail;
@@ -131,7 +131,7 @@ async function loadTesseractStatus() {
       detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
     }
     info.innerHTML =
-      `<span class="glyph">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
+      `<span class="glyph" aria-hidden="true">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
   }
   // Populate the language datalist with whatever's actually installed.
   const dl = $("tesseract-langs");
@@ -196,7 +196,9 @@ function renderStaged() {
     const li = document.createElement("li");
     li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${f.pages} page(s)</span></span>`;
     const rm = document.createElement("button");
-    rm.className = "rm"; rm.textContent = "×"; rm.title = "Remove";
+    rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
+    rm.title = "Remove " + f.name;
+    rm.setAttribute("aria-label", "Remove " + f.name);  // "×" alone says nothing
     rm.onclick = () => { staged = staged.filter((x) => x.id !== f.id); renderStaged(); };
     li.appendChild(rm);
     ul.appendChild(li);
@@ -236,6 +238,7 @@ function pollJob(jobId) {
     catch (e) { return; }
     const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
     $("progress-bar").style.width = pct + "%";
+    $("progress").setAttribute("aria-valuenow", String(pct));
     $("progress-text").textContent =
       job.status === "running"
         ? `Processing ${job.done}/${job.total}${job.current ? " — " + job.current : ""}`
@@ -244,7 +247,12 @@ function pollJob(jobId) {
     if (job.status !== "running") {
       clearInterval(pollTimer);
       $("transcribe").disabled = false;
-      if (job.status === "done") renderResults(jobId, job);
+      if (job.status === "done") {
+        renderResults(jobId, job);
+        // Send keyboard/screen-reader focus to the freshly-rendered results.
+        const h = $("results-heading");
+        if (h) h.focus();
+      }
     }
   };
   tick();
@@ -273,10 +281,12 @@ function renderResults(jobId, job) {
       const links = div.querySelector(".links");
       r.images.forEach((im, i) => {
         const label = r.images.length > 1 ? `Preview p${i + 1}` : "Preview boxes";
+        const pageSuffix = r.images.length > 1 ? `, page ${i + 1}` : "";
         const btn = document.createElement("button");
-        btn.className = "btn small";
+        btn.className = "btn small"; btn.type = "button";
         btn.textContent = label;
-        btn.onclick = () => openPreview(im.preview, `${r.source_name} — detected lines`);
+        btn.setAttribute("aria-label", `Preview detected line boxes for ${r.source_name}${pageSuffix}`);
+        btn.onclick = () => openPreview(im.preview, `${r.source_name} — detected lines${pageSuffix}`);
         links.appendChild(btn);
         const a = document.createElement("a");
         a.className = "btn small"; a.href = im.download;
@@ -288,13 +298,24 @@ function renderResults(jobId, job) {
   }
 }
 
-// ---- preview modal ------------------------------------------------------ //
+// ---- preview modal (native <dialog>: focus trap + Esc + inert bg) ------- //
+let lastFocused = null;
 function openPreview(url, title) {
-  $("modal-img").src = url;
+  const dlg = $("modal");
+  const img = $("modal-img");
+  img.src = url;
+  img.alt = title;                 // descriptive alt for this specific preview
   $("modal-title").textContent = title;
-  $("modal").hidden = false;
+  lastFocused = document.activeElement;  // so we can restore focus on close
+  if (typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
+  else dlg.setAttribute("open", "");     // fallback for very old browsers
 }
-function closePreview() { $("modal").hidden = true; $("modal-img").src = ""; }
+function closePreview() {
+  const dlg = $("modal");
+  if (typeof dlg.close === "function" && dlg.open) dlg.close();
+  else dlg.removeAttribute("open");
+  $("modal-img").removeAttribute("src");
+}
 
 // ---- misc --------------------------------------------------------------- //
 function escapeHtml(s) {
@@ -332,8 +353,14 @@ function wire() {
   });
 
   $("transcribe").onclick = transcribe;
+  const dlg = $("modal");
   $("modal-close").onclick = closePreview;
-  $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closePreview(); });
+  // Clicking the backdrop (target is the dialog itself) closes it.
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) closePreview(); });
+  // Esc (native) and the Close button both fire 'close' -> restore focus.
+  dlg.addEventListener("close", () => {
+    if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+  });
 }
 
 // ---- heartbeat: server shuts itself down when the tab stops pinging ---- //
