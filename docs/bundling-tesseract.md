@@ -145,9 +145,10 @@ offending files to `upx_exclude` or disable UPX for the engine binaries.
   extra MB. (Handwriting/Gemini mode reads any language regardless; bundled packs
   only affect the local Tesseract path.) The Windows CI job downloads a default
   set focused on **~1700-onward Western records** — Western/Central/Northern
-  European, Latin, German Fraktur (`frk`), Russian/Ukrainian, and Greek — into
-  `tessdata` before packaging; the spec then ships **every** `*.traineddata`
-  present. Edit the `$langs` list in `.github/workflows/build.yml` to adjust.
+  European, Latin, German Fraktur (`frk`), Russian/Ukrainian, Greek, and Hebrew
+  — into `tessdata` before packaging; the spec then ships **every**
+  `*.traineddata` present. Edit the `$langs` list in
+  `.github/workflows/build.yml` to adjust.
 - There are three data flavors: `tessdata_fast` (smallest), `tessdata`
   (standard), `tessdata_best` (largest/most accurate). We use `tessdata_fast`
   for the downloaded packs so a broad set stays small.

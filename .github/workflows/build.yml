@@ -59,7 +59,9 @@ jobs:
             # Central European
             "pol","ces","hun",
             # Eastern European & Greek
-            "rus","ukr","ell"
+            "rus","ukr","ell",
+            # Hebrew -- Jewish genealogy / Hebrew-script records
+            "heb"
           )
           $failed = @()
           foreach ($l in $langs) {
