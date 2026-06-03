@@ -20,7 +20,7 @@ async function api(method, url, body) {
 }
 
 // ---- settings ----------------------------------------------------------- //
-const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
+const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence", "price_input_per_mtok", "price_output_per_mtok"];
 const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution", "tesseract_language"];
 const BOOL = ["use_mock", "preprocess", "refine_word_boxes"];
 
@@ -204,6 +204,10 @@ function renderStaged() {
     ul.appendChild(li);
   }
   $("transcribe").disabled = staged.length === 0;
+  $("estimate").disabled = staged.length === 0;
+  // Any change to the file set invalidates a prior cost estimate.
+  const est = $("estimate-info");
+  if (est) { est.hidden = true; est.innerHTML = ""; }
   $("action-note").textContent = stagedStatus();
 }
 
@@ -217,6 +221,10 @@ async function transcribe() {
   // above the fold on smaller laptops.
   setSettingsOpen(false);  // collapse Settings; remembers the collapsed state
   $("transcribe").disabled = true;
+  $("estimate").disabled = true;
+  const est = $("estimate-info");
+  if (est) { est.hidden = true; est.innerHTML = ""; }
+  $("token-text").textContent = "";
   $("results-card").hidden = true;
   $("results").innerHTML = "";
   try {
@@ -243,9 +251,20 @@ function pollJob(jobId) {
         ? `Processing ${job.done}/${job.total}${job.current ? " — " + job.current : ""}`
         : job.status === "error" ? "Error: " + job.error
         : `Done — ${job.total} file(s)`;
+    // Live token counter: ticks up as each page's call returns.
+    const tok = $("token-text");
+    if (tok) {
+      if (job.tokens && job.tokens.calls) {
+        const prefix = job.status === "running" ? "Tokens so far — " : "Tokens — ";
+        tok.textContent = prefix + tokenSummary(job.tokens) + costSuffix(job.tokens);
+      } else {
+        tok.textContent = "";
+      }
+    }
     if (job.status !== "running") {
       clearInterval(pollTimer);
       $("transcribe").disabled = false;
+      $("estimate").disabled = staged.length === 0;
       if (job.status === "done") {
         renderResults(jobId, job);
         // Send keyboard/screen-reader focus to the freshly-rendered results.
@@ -261,12 +280,28 @@ function pollJob(jobId) {
 function renderResults(jobId, job) {
   $("results-card").hidden = false;
   $("zip-link").href = `/api/download/${jobId}.zip`;
+  // Per-job token total with the transparent dollar disclaimer.
+  const totals = $("results-tokens");
+  if (totals) {
+    if (job.tokens && job.tokens.calls) {
+      totals.hidden = false;
+      totals.innerHTML = `<b>Total tokens:</b> ${tokenSummary(job.tokens)}.${costDisclaimerHtml(job.tokens)}`;
+    } else {
+      totals.hidden = true;
+      totals.innerHTML = "";
+    }
+  }
   const root = $("results");
   root.innerHTML = "";
   for (const r of job.results) {
     const div = document.createElement("div");
     div.className = "result";
-    let html = `<h3>${escapeHtml(r.source_name)} <span class="pill">${r.n_pages} page(s), ${r.n_lines} lines</span></h3>`;
+    const tokPill = (r.tokens && r.tokens.calls)
+      ? ` <span class="pill">${formatTokens(r.tokens.total)} tokens${
+          r.tokens.cost !== null && r.tokens.cost !== undefined ? ", ~" + formatCost(r.tokens.cost) : ""
+        }</span>`
+      : "";
+    let html = `<h3>${escapeHtml(r.source_name)} <span class="pill">${r.n_pages} page(s), ${r.n_lines} lines</span>${tokPill}</h3>`;
     if (r.error) {
       html += `<p class="err">Error: ${escapeHtml(r.error)}</p>`;
       div.innerHTML = html;
@@ -316,6 +351,96 @@ function closePreview() {
   $("modal-img").removeAttribute("src");
 }
 
+// ---- token / cost estimate --------------------------------------------- //
+const PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing";
+
+function formatTokens(n) {
+  return Number(n || 0).toLocaleString();
+}
+
+// Dollar amounts can be tiny; scale precision so a sub-cent estimate isn't
+// rounded away to "$0.00".
+function formatCost(usd) {
+  if (usd === null || usd === undefined) return "";
+  const v = Number(usd);
+  if (v === 0) return "$0.00";
+  if (v < 0.01) return "$" + v.toFixed(4);
+  if (v < 1) return "$" + v.toFixed(3);
+  return "$" + v.toFixed(2);
+}
+
+function priceBasis(t) {
+  return `$${Number(t.price_input_per_mtok || 0).toFixed(2)}/1M input and `
+    + `$${Number(t.price_output_per_mtok || 0).toFixed(2)}/1M output`;
+}
+
+// Compact token line (no dollars): "12,345 tokens · 10,000 in / 2,345 out · 8 API calls".
+function tokenSummary(t) {
+  if (!t) return "";
+  const parts = [`${formatTokens(t.total)} tokens`];
+  parts.push(
+    `${formatTokens(t.input)} in / ${formatTokens(t.output)} out`
+    + (t.thinking ? ` (incl. ${formatTokens(t.thinking)} thinking)` : "")
+  );
+  if (t.calls) parts.push(`${formatTokens(t.calls)} API call${t.calls === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+// " · ~$0.0123 (est.)" when prices are set, else "".
+function costSuffix(t) {
+  if (!t || t.cost === null || t.cost === undefined) return "";
+  return ` · ~${formatCost(t.cost)} (est.)`;
+}
+
+// The fuller, transparent dollar disclaimer shown with a final/total figure.
+function costDisclaimerHtml(t) {
+  if (!t || t.cost === null || t.cost === undefined) {
+    return ` <span class="muted">Set per-million prices in Advanced to estimate the dollar cost.</span>`;
+  }
+  return ` <span class="muted">&mdash; <b>~${formatCost(t.cost)}</b> is a rough estimate, not a guarantee, `
+    + `computed at ${priceBasis(t)} (the prices you set in Advanced). Token counts are exact; Google `
+    + `bills the actual usage &mdash; verify live rates at `
+    + `<a href="${PRICING_URL}" target="_blank" rel="noopener noreferrer">Gemini API pricing</a>.</span>`;
+}
+
+async function estimateCost() {
+  if (!staged.length) return;
+  const box = $("estimate-info");
+  if (!box) return;
+  box.hidden = false;
+  box.className = "key-info estimate-info";
+  box.innerHTML = `<span>Estimating&hellip;</span>`;
+  $("estimate").disabled = true;
+  try {
+    const data = await api("POST", "/api/estimate", { file_ids: staged.map((f) => f.id) });
+    box.className = "key-info estimate-info";
+    box.innerHTML = renderEstimate(data);
+  } catch (e) {
+    box.className = "key-info estimate-info warn";
+    box.innerHTML =
+      `<span class="glyph" aria-hidden="true">!</span><span>Couldn't estimate: ${escapeHtml(e.message)}</span>`;
+  } finally {
+    $("estimate").disabled = staged.length === 0;
+  }
+}
+
+function renderEstimate(d) {
+  if (d.billable === false) {
+    return `<span class="glyph" aria-hidden="true">●</span><span>No Gemini tokens for these `
+      + `${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span>`;
+  }
+  const head =
+    `Estimate for ${d.files} file(s), ${formatTokens(d.pages)} page(s): about `
+    + `<b>${formatTokens(d.input)}</b> input tokens plus ~${formatTokens(d.output)} output tokens `
+    + `(assuming ~${formatTokens(d.assumed_output_tokens_per_call)} output tokens across `
+    + `${formatTokens(d.calls)} API call(s)).`;
+  const cost = costDisclaimerHtml(d);
+  const caveat =
+    ` <span class="muted">Input is measured from the first page of each file; output length varies, `
+    + `so treat this as a ballpark &mdash; the live counter shows the real usage during the run.</span>`;
+  return `<span class="glyph" aria-hidden="true">&#8776;</span><span>${head}${cost}${caveat}</span>`;
+}
+
 // ---- misc --------------------------------------------------------------- //
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
@@ -352,6 +477,7 @@ function wire() {
   });
 
   $("transcribe").onclick = transcribe;
+  $("estimate").onclick = estimateCost;
 
   // Settings disclosure (heading > button) toggle + theme switcher.
   $("settings-toggle").onclick = () =>

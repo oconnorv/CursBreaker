@@ -84,3 +84,87 @@ class PageResult(BaseModel):
     height: int
     lines: list[TranscribedLine]
     plain_text: str
+
+
+class TokenUsage(BaseModel):
+    """Gemini token counts accumulated over one or more API calls.
+
+    Google bills two kinds of tokens, at different per-million rates:
+
+    * **input** -- ``prompt_token_count``; dominated by the page *image*, whose
+      token count grows with media resolution (the high/medium/low tiling).
+    * **output** -- ``candidates_token_count`` (the transcription text) plus
+      ``thoughts_token_count`` (reasoning), both billed at the output rate. We
+      keep ``thinking`` as a *separate* field (it is part of the billed output)
+      so the cost of reasoning is visible -- handwriting accuracy is best with a
+      small thinking budget, so users tuning it can see what it costs.
+
+    ``calls`` is the number of billed ``generate_content`` responses, so a
+    two-pass page (transcribe + locate) shows 2. Adding two usages sums every
+    field, which is how per-file totals roll up into a per-job total."""
+
+    input: int = 0
+    output: int = 0
+    thinking: int = 0
+    calls: int = 0
+
+    @property
+    def total(self) -> int:
+        """Every billed token: input + visible output + thinking."""
+        return self.input + self.output + self.thinking
+
+    def add_response(self, usage_metadata) -> None:
+        """Accumulate one response's ``usage_metadata`` (an SDK object or a
+        dict). A successful call with no metadata still counts as one call."""
+        self.calls += 1
+        if usage_metadata is None:
+            return
+
+        def _get(name: str) -> int:
+            if isinstance(usage_metadata, dict):
+                val = usage_metadata.get(name)
+            else:
+                val = getattr(usage_metadata, name, 0)
+            try:
+                return int(val or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        prompt = _get("prompt_token_count")
+        thoughts = _get("thoughts_token_count")
+        candidates = _get("candidates_token_count")
+        # Some SDK/model combinations omit candidates but report a total; derive
+        # the visible output from it so the numbers still add up.
+        if not candidates:
+            total = _get("total_token_count")
+            if total:
+                candidates = max(0, total - prompt - thoughts)
+        self.input += prompt
+        self.thinking += thoughts
+        self.output += candidates
+
+    def cost(self, price_input_per_mtok: float, price_output_per_mtok: float) -> float:
+        """Rough dollar cost from per-million-token prices. Thinking is billed at
+        the output rate, so it joins ``output`` here."""
+        return (
+            self.input / 1_000_000 * price_input_per_mtok
+            + (self.output + self.thinking) / 1_000_000 * price_output_per_mtok
+        )
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            input=self.input + other.input,
+            output=self.output + other.output,
+            thinking=self.thinking + other.thinking,
+            calls=self.calls + other.calls,
+        )
+
+    def __sub__(self, other: "TokenUsage") -> "TokenUsage":
+        """Field-wise difference, clamped at zero -- used to snapshot the usage a
+        single file added to a long-lived provider."""
+        return TokenUsage(
+            input=max(0, self.input - other.input),
+            output=max(0, self.output - other.output),
+            thinking=max(0, self.thinking - other.thinking),
+            calls=max(0, self.calls - other.calls),
+        )

@@ -176,6 +176,21 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .key-info .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
 .key-info .glyph { font-weight: 700; font-size: 15px; line-height: 1; }
 
+/* Cost estimate: a longer, wrapping message in a neutral box (a dollar figure
+   isn't "success", so it shouldn't read green). Glyph pinned to the top-left so
+   multi-line text stays aligned. The red `.warn` (errors) still wins by
+   specificity. */
+.estimate-info { display: flex; align-items: flex-start; line-height: 1.5;
+  background: var(--panel-2); border-color: var(--border-strong); color: var(--text); }
+.estimate-info .glyph { flex: none; margin-top: 1px; }
+.estimate-info a { color: var(--link); text-decoration: underline; }
+.estimate-info.warn a { color: inherit; }
+
+/* Live + total token readouts. */
+.token-text { margin-top: 8px; line-height: 1.5; }
+.token-text[hidden] { display: none; }
+.token-text a { color: var(--link); text-decoration: underline; }
+
 .dropzone {
   border: 2px dashed var(--border-strong); border-radius: 12px;
   padding: 26px; text-align: center; transition: border-color .15s, background .15s;

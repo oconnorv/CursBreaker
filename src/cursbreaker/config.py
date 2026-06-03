@@ -68,6 +68,15 @@ class Settings(BaseModel):
     interpolated_confidence: int = 60  # x_wconf for words on interpolated lines
     language: str = "en"  # used for xml:lang and per-line "lang" in hOCR
 
+    # --- Cost estimate (tokens are always tracked; dollars are optional) ---
+    # Per-million-token prices, used only to turn token counts into a rough
+    # dollar figure shown locally. They default to 0 so no (possibly stale)
+    # price is ever implied: a dollar estimate appears only once the user enters
+    # the live prices from Google's pricing page, which change over time and by
+    # model. The token counts themselves are always exact and need no price.
+    price_input_per_mtok: float = 0.0
+    price_output_per_mtok: float = 0.0
+
     def public_dict(self) -> dict:
         """Settings safe to send to the browser (API key presence only)."""
         data = self.model_dump()

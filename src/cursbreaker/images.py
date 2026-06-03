@@ -113,10 +113,12 @@ def _preprocess(img: Image.Image, *, enabled: bool, max_dimension: int) -> Image
     return img
 
 
-def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
+def _raster_frames(path: Path, *, dpi: int, max_frames: int = 0) -> list[Image.Image]:
     """Return every content frame of a raster file (1 for normal images, N for
     multi-frame TIFF/animated GIF). Embedded thumbnails / reduced-resolution
-    preview frames (TIFF ``NewSubfileType`` flag) are skipped.
+    preview frames (TIFF ``NewSubfileType`` flag) are skipped. ``max_frames``
+    (>0) stops early once that many content frames are collected -- used by the
+    cost estimate, which only needs the first page.
 
     Tries Pillow first. Falls back to PyMuPDF (already a dependency) for
     files Pillow can't decode -- most commonly TIFFs whose compression
@@ -132,6 +134,8 @@ def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
                 if n > 1 and _is_thumbnail_frame(im):
                     continue
                 frames.append(im.copy())
+                if max_frames and len(frames) >= max_frames:
+                    break
         if not frames:
             # Every frame was flagged; keep the first so we never return
             # nothing for an otherwise readable file.
@@ -140,10 +144,10 @@ def _raster_frames(path: Path, *, dpi: int) -> list[Image.Image]:
                 frames = [im.copy()]
         return frames
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
-        return _fitz_frames(path, zoom=dpi / 72.0)
+        return _fitz_frames(path, zoom=dpi / 72.0, max_frames=max_frames)
 
 
-def _fitz_frames(path: Path, *, zoom: float) -> list[Image.Image]:
+def _fitz_frames(path: Path, *, zoom: float, max_frames: int = 0) -> list[Image.Image]:
     frames: list[Image.Image] = []
     matrix = fitz.Matrix(zoom, zoom)
     with fitz.open(path) as doc:
@@ -152,6 +156,8 @@ def _fitz_frames(path: Path, *, zoom: float) -> list[Image.Image]:
             frames.append(
                 Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             )
+            if max_frames and len(frames) >= max_frames:
+                break
     return frames
 
 
@@ -161,8 +167,11 @@ def load_pages(
     preprocess: bool = True,
     max_dimension: int = 0,
     pdf_dpi: int = 300,
+    max_pages: int = 0,
 ) -> list[LoadedPage]:
-    """Load one input file into a list of pages."""
+    """Load one input file into a list of pages. ``max_pages`` (>0) loads only
+    the first N content pages -- the cost estimate uses this to render just the
+    first page of a large file rather than rasterizing the whole document."""
     path = Path(path)
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXT:
@@ -170,9 +179,9 @@ def load_pages(
 
     pages: list[LoadedPage] = []
     if ext in PDF_EXT:
-        raw_frames = _rasterize_pdf(path, dpi=pdf_dpi)
+        raw_frames = _rasterize_pdf(path, dpi=pdf_dpi, max_frames=max_pages)
     else:
-        raw_frames = _raster_frames(path, dpi=pdf_dpi)
+        raw_frames = _raster_frames(path, dpi=pdf_dpi, max_frames=max_pages)
 
     multi = len(raw_frames) > 1
     for i, frame in enumerate(raw_frames):
@@ -194,5 +203,5 @@ def load_pages(
     return pages
 
 
-def _rasterize_pdf(path: Path, *, dpi: int) -> list[Image.Image]:
-    return _fitz_frames(path, zoom=dpi / 72.0)
+def _rasterize_pdf(path: Path, *, dpi: int, max_frames: int = 0) -> list[Image.Image]:
+    return _fitz_frames(path, zoom=dpi / 72.0, max_frames=max_frames)

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=9" />
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -106,7 +106,10 @@
                 <input id="tesseract_language" list="tesseract-langs" placeholder="eng" />
                 <datalist id="tesseract-langs"></datalist>
               </label>
+              <label class="field"><span>Price: input $ / 1M tokens</span><input type="number" id="price_input_per_mtok" step="0.01" min="0" /></label>
+              <label class="field"><span>Price: output $ / 1M tokens</span><input type="number" id="price_output_per_mtok" step="0.01" min="0" /></label>
             </div>
+            <p class="hint">Prices feed only the <em>local</em> cost estimate &mdash; they're never sent anywhere. Leave them at 0 to see token counts without dollars. Rates vary by model and change over time; check the current numbers at <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">Google's Gemini API pricing</a>.</p>
             <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
           </details>
         </div>
@@ -123,8 +126,10 @@
       <ul id="staged" class="staged" aria-label="Files ready to transcribe"></ul>
       <div class="actions">
         <button id="transcribe" class="btn primary" type="button" disabled>Transcribe</button>
+        <button id="estimate" class="btn" type="button" disabled>Estimate cost</button>
         <span id="action-note" class="muted" role="status" aria-live="polite"></span>
       </div>
+      <div id="estimate-info" class="key-info estimate-info" role="status" aria-live="polite" hidden></div>
     </section>
 
     <section class="card" id="progress-card" aria-labelledby="progress-heading" hidden>
@@ -134,6 +139,7 @@
         <div id="progress-bar" class="progress-bar"></div>
       </div>
       <p id="progress-text" class="muted" role="status" aria-live="polite"></p>
+      <p id="token-text" class="muted token-text" role="status" aria-live="polite"></p>
     </section>
 
     <section class="card" id="results-card" aria-labelledby="results-heading" hidden>
@@ -141,6 +147,7 @@
         <h2 id="results-heading" tabindex="-1">Results</h2>
         <a id="zip-link" class="btn small" href="#">Download all (.zip)</a>
       </div>
+      <p id="results-tokens" class="muted token-text" hidden></p>
       <div id="results"></div>
     </section>
   </main>
@@ -164,6 +171,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

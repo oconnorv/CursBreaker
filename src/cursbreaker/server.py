@@ -31,7 +31,7 @@ from .config import load_settings, save_settings
 from .gemini_client import SUGGESTED_MODELS, make_provider
 from .hocr import XHTML_NS
 from .images import SUPPORTED_EXT, count_content_pages, is_supported
-from .pipeline import process_batch
+from .pipeline import estimate_usage, process_batch
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -162,6 +162,58 @@ class ProcessRequest(BaseModel):
     use_mock: bool | None = None
 
 
+class EstimateRequest(BaseModel):
+    file_ids: list[str]
+    mode: str | None = None
+    use_mock: bool | None = None
+
+
+@app.post("/api/estimate")
+def estimate(req: EstimateRequest):
+    """Free pre-flight estimate of the tokens (and, if prices are set, the rough
+    dollars) a run will cost -- before any transcription happens. Uses Gemini's
+    no-charge ``count_tokens`` for input; output is a labelled assumption."""
+    paths = [STAGED[i] for i in req.file_ids if i in STAGED]
+    if not paths:
+        raise HTTPException(400, "No staged files to estimate.")
+
+    settings = load_settings()
+    if req.mode in ("one_pass", "two_pass"):
+        settings.mode = req.mode
+    if req.use_mock is not None:
+        settings.use_mock = req.use_mock
+
+    content = (settings.content_type or "handwriting").lower()
+    # No Gemini call -> no token cost. Say so plainly instead of guessing.
+    if settings.use_mock or content == "text":
+        reason = "demo mode" if settings.use_mock else "Printed-only mode"
+        return {
+            "billable": False,
+            "reason": reason,
+            "files": len(paths),
+            "input": 0,
+            "output": 0,
+            "total": 0,
+            "calls": 0,
+            "cost": None,
+            "price_input_per_mtok": settings.price_input_per_mtok,
+            "price_output_per_mtok": settings.price_output_per_mtok,
+        }
+
+    if not settings.resolved_api_key():
+        raise HTTPException(
+            400, "No Gemini API key set. Add one in Settings or enable demo mode."
+        )
+
+    try:
+        provider = make_provider(settings)
+        data = estimate_usage(paths, provider, settings)
+    except Exception as exc:
+        raise HTTPException(502, f"Couldn't estimate right now: {exc}")
+    data["billable"] = True
+    return data
+
+
 @app.post("/api/process")
 def process(req: ProcessRequest):
     paths = [STAGED[i] for i in req.file_ids if i in STAGED]
@@ -179,6 +231,12 @@ def process(req: ProcessRequest):
     job_id = uuid.uuid4().hex
     out_dir = JOBS_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Prices are captured at job start so the live cost figure stays stable even
+    # if the user edits them mid-run; tokens are always counted regardless.
+    prices = {
+        "input": settings.price_input_per_mtok,
+        "output": settings.price_output_per_mtok,
+    }
     JOBS[job_id] = {
         "status": "running",
         "done": 0,
@@ -187,6 +245,8 @@ def process(req: ProcessRequest):
         "results": [],
         "out_dir": str(out_dir),
         "error": None,
+        "prices": prices,
+        "tokens": _usage_to_dict(None, prices),  # zeros until the provider exists
     }
     threading.Thread(
         target=_run_job, args=(job_id, paths, settings, out_dir), daemon=True
@@ -198,6 +258,9 @@ def _run_job(job_id, paths, settings, out_dir):
     job = JOBS[job_id]
     try:
         provider = make_provider(settings)
+        # Expose the provider so a status poll can read its running token total
+        # live (per page, as each call returns), not just at file boundaries.
+        job["_provider"] = provider
 
         def cb(done, total, name):
             job["done"], job["total"], job["current"] = done, total, name
@@ -216,13 +279,48 @@ def _run_job(job_id, paths, settings, out_dir):
                     for n in r.image_names
                 ],
                 "error": r.error,
+                "tokens": _usage_to_dict(r.token_usage, job["prices"]),
             }
             for r in results
         ]
+        job["tokens"] = _usage_to_dict(provider.usage, job["prices"])
         job["status"] = "done"
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)
+
+
+def _usage_to_dict(usage, prices=None) -> dict:
+    """Serialize a ``TokenUsage`` (or None -> zeros) for the browser, adding the
+    dollar cost only when prices are set so a stale price is never implied."""
+    pin = (prices or {}).get("input") or 0.0
+    pout = (prices or {}).get("output") or 0.0
+    if usage is None:
+        d = {"input": 0, "output": 0, "thinking": 0, "total": 0, "calls": 0}
+    else:
+        d = {
+            "input": usage.input,
+            "output": usage.output,
+            "thinking": usage.thinking,
+            "total": usage.total,
+            "calls": usage.calls,
+        }
+    d["price_input_per_mtok"] = pin
+    d["price_output_per_mtok"] = pout
+    d["cost"] = (usage.cost(pin, pout) if usage is not None else 0.0) if (pin or pout) else None
+    return d
+
+
+def _public_job(job: dict) -> dict:
+    """A copy of a job's state safe to send to the browser: private keys (the
+    provider handle) dropped, and the token counter refreshed live from the
+    provider so it ticks up while the job runs."""
+    out = {k: v for k, v in job.items() if not k.startswith("_")}
+    provider = job.get("_provider")
+    usage = getattr(provider, "usage", None) if provider is not None else None
+    if usage is not None:
+        out["tokens"] = _usage_to_dict(usage, job.get("prices"))
+    return out
 
 
 def _url(job_id, name):
@@ -234,7 +332,7 @@ def job_status(job_id: str):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
-    return job
+    return _public_job(job)
 
 
 # --------------------------------------------------------------------------- #

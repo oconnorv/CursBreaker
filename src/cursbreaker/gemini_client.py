@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .config import Settings
-from .models import LineBox
+from .models import LineBox, TokenUsage
 
 # Shown as hints only when the live model list is unavailable; the UI prefers
 # the live list from the user's key. We keep these to currently-callable models:
@@ -87,6 +87,14 @@ class TranscriptionProvider(Protocol):
     ) -> list[LineBox]: ...
 
     def list_models(self) -> list[str]: ...
+
+    # Running total of tokens this provider has spent (input/output/thinking/
+    # calls). The pipeline snapshots deltas per file; the server reads it live.
+    usage: TokenUsage
+
+    def count_input_tokens(
+        self, image_png: bytes, mime: str = "image/png"
+    ) -> int: ...
 
 
 def make_provider(settings: Settings) -> TranscriptionProvider:
@@ -255,6 +263,9 @@ class GeminiProvider:
         # Models that returned "not found" this session; skip re-trying them and
         # go straight to a fallback so we don't repeat the failed call per page.
         self._dead_models: set[str] = set()
+        # Running token total across every billed call (input/output/thinking/
+        # calls). Read live by the server for the in-progress token counter.
+        self.usage = TokenUsage()
 
     # -- public API ---------------------------------------------------------
 
@@ -301,6 +312,27 @@ class GeminiProvider:
         except Exception:
             return SUGGESTED_MODELS
         return sorted(set(names)) or SUGGESTED_MODELS
+
+    def count_input_tokens(
+        self, image_png: bytes, mime: str = "image/png"
+    ) -> int:
+        """How many *input* tokens this page (image + transcription prompt) will
+        cost, via the SDK's ``count_tokens``. This is metadata-only -- it spends
+        no generation quota -- so it powers a free pre-flight estimate. Output
+        tokens can't be known until the text is generated, so only the (usually
+        dominant) image-input side is measured here. Returns 0 on any failure so
+        an estimate never blocks the workflow."""
+        from google.genai import types
+
+        part = types.Part.from_bytes(data=image_png, mime_type=mime)
+        model = self._model_candidates(self.settings.transcription_model)[0]
+        try:
+            resp = self.client.models.count_tokens(
+                model=model, contents=[PROMPT_TRANSCRIBE, part]
+            )
+        except Exception:
+            return 0
+        return int(getattr(resp, "total_tokens", 0) or 0)
 
     # -- internals ----------------------------------------------------------
 
@@ -369,9 +401,14 @@ class GeminiProvider:
         delay = _RETRY_BASE_DELAY
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                return self.client.models.generate_content(
+                resp = self.client.models.generate_content(
                     model=model, contents=contents, config=cfg
                 )
+                # Tally what this (successful) call actually billed. Failed
+                # attempts before a retry are not counted -- they produced no
+                # output -- so this reflects tokens we were charged for.
+                self.usage.add_response(getattr(resp, "usage_metadata", None))
+                return resp
             except Exception as exc:
                 if attempt >= _MAX_RETRIES or not _is_transient(exc):
                     raise
@@ -469,6 +506,11 @@ class MockProvider:
         "Add your own key in Settings for real results.",
     ]
 
+    def __init__(self):
+        # Demo mode makes no real API call, so nothing is ever billed; the
+        # counter stays at zero, which is the honest figure to show.
+        self.usage = TokenUsage()
+
     def transcribe_text(self, image_png: bytes, mime: str = "image/png") -> str:
         return "\n".join(self._LINES)
 
@@ -484,6 +526,11 @@ class MockProvider:
 
     def list_models(self) -> list[str]:
         return ["mock-model", *SUGGESTED_MODELS]
+
+    def count_input_tokens(
+        self, image_png: bytes, mime: str = "image/png"
+    ) -> int:
+        return 0
 
     def _boxes(self) -> list[LineBox]:
         out: list[LineBox] = []

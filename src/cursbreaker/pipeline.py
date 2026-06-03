@@ -16,12 +16,19 @@ from .align import align_lines, align_words
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
-from .images import load_pages
-from .models import OcrWord, PageResult, PixelBox, PlacedLine, TranscribedLine
+from .images import count_content_pages, load_pages
+from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
 from .searchable_pdf import build_searchable_pdf
 from . import tesseract_client
 
 ProgressCb = Callable[[int, int, str], None]
+
+# Pre-flight estimate only: a transparent, clearly-labelled assumption for how
+# many tokens one Gemini call returns (transcription text plus a little
+# thinking). Output length is genuinely unknowable until the page is read, so
+# this is surfaced to the user rather than hidden -- the live counter shows the
+# real number during the run.
+_EST_OUTPUT_TOKENS_PER_CALL = 800
 
 
 @dataclass
@@ -34,6 +41,8 @@ class FileResult:
     pdf_name: str | None = None
     image_names: list[str] = field(default_factory=list)
     error: str | None = None
+    # Tokens this file billed to Gemini (zero for Printed-only / demo mode).
+    token_usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 def process_page(loaded, provider: TranscriptionProvider, settings: Settings) -> PageResult:
@@ -168,6 +177,10 @@ def process_file(
     path = Path(path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Snapshot the provider's running token total so we can report exactly what
+    # *this* file added (the provider is shared across a batch).
+    usage_before = _provider_usage(provider)
+
     loaded_pages = load_pages(
         path,
         preprocess=settings.preprocess,
@@ -218,7 +231,17 @@ def process_file(
         hocr_name=hocr_name,
         pdf_name=pdf_name,
         image_names=image_names,
+        token_usage=_provider_usage(provider) - usage_before,
     )
+
+
+def _provider_usage(provider: TranscriptionProvider) -> TokenUsage:
+    """A copy of a provider's running token total, or an empty one if the
+    provider doesn't track usage (keeps callers defensive)."""
+    usage = getattr(provider, "usage", None)
+    if isinstance(usage, TokenUsage):
+        return usage.model_copy()
+    return TokenUsage()
 
 
 def process_batch(
@@ -241,3 +264,73 @@ def process_batch(
         if progress_cb:
             progress_cb(idx + 1, total, name)
     return results
+
+
+def estimate_usage(
+    paths: list[str | Path],
+    provider: TranscriptionProvider,
+    settings: Settings,
+) -> dict:
+    """Pre-flight token/cost estimate for a set of files -- before any
+    transcription runs, so the user can decide whether to proceed.
+
+    *Input* tokens (dominated by the page image) are measured with the
+    provider's free ``count_tokens`` on the first page of each file and scaled by
+    the page count -- fast, and exact enough that the user can sanity-check the
+    bill. *Output* tokens can't be known until the text is generated, so they use
+    a single, surfaced per-call assumption. Two-pass sends the image twice, so it
+    counts two calls per page; Printed-only/demo runs make no Gemini call and
+    estimate to zero. The returned dict is clearly labelled as an estimate by the
+    UI, which also shows the per-million prices used."""
+    content = (settings.content_type or "handwriting").lower()
+    if content == "text":
+        calls_per_page = 0
+    else:
+        calls_per_page = 1 if settings.mode == "one_pass" else 2
+
+    input_tokens = 0
+    total_pages = 0
+    for path in paths:
+        path = Path(path)
+        try:
+            n_pages = count_content_pages(path)
+        except Exception:
+            n_pages = 1
+        total_pages += n_pages
+        if calls_per_page == 0:
+            continue
+        # Render only the first page (cheap even for a big PDF) and scale its
+        # measured input tokens across the file's pages and per-page calls.
+        try:
+            first = load_pages(
+                path,
+                preprocess=settings.preprocess,
+                max_dimension=settings.max_dimension,
+                pdf_dpi=settings.pdf_dpi,
+                max_pages=1,
+            )[0]
+            per_page_input = provider.count_input_tokens(first.to_png_bytes())
+        except Exception:
+            per_page_input = 0
+        input_tokens += per_page_input * n_pages * calls_per_page
+
+    calls = total_pages * calls_per_page
+    output_tokens = calls * _EST_OUTPUT_TOKENS_PER_CALL
+    usage = TokenUsage(input=input_tokens, output=output_tokens, calls=calls)
+
+    pin = settings.price_input_per_mtok
+    pout = settings.price_output_per_mtok
+    cost = usage.cost(pin, pout) if (pin or pout) else None
+    return {
+        "files": len(paths),
+        "pages": total_pages,
+        "calls": calls,
+        "calls_per_page": calls_per_page,
+        "input": usage.input,
+        "output": usage.output,  # assumed; see assumed_output_tokens_per_call
+        "total": usage.total,
+        "assumed_output_tokens_per_call": _EST_OUTPUT_TOKENS_PER_CALL,
+        "cost": cost,
+        "price_input_per_mtok": pin,
+        "price_output_per_mtok": pout,
+    }
