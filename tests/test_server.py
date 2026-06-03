@@ -425,7 +425,8 @@ def test_estimate_no_staged_files_is_400():
 def test_models_endpoint_returns_priced_catalog():
     body = client.get("/api/models").json()
     ids = [m["id"] for m in body["models"]]
-    assert "gemini-3.1-pro-preview" in ids
+    # Pro is first (the dropdown's default position + the saved default model).
+    assert ids[0] == "gemini-3.1-pro-preview"
     assert "gemini-3.5-flash" in ids
     assert "gemini-3.1-flash-lite" in ids
     assert body["prices_as_of"]            # shown in the UI for transparency

@@ -117,34 +117,30 @@ async function loadTesseractStatus() {
     return;
   }
   const info = $("tesseract-info");
-  if (!info) return;
-  info.hidden = false;
-  if (data.available) {
-    info.className = "key-info";
-    const langs = (data.languages || []).join(", ") || "eng";
-    const ver = data.version ? ` v${escapeHtml(data.version)}` : "";
-    const SOURCE_NOTE = {
-      bundled: " (bundled with CursBreaker)",
-      managed: " (portable build in your CursBreaker folder)",
-    };
-    const src = SOURCE_NOTE[data.source] || "";
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
-  } else {
-    info.className = "key-info warn";
-    let detail;
-    if (data.wrapper_present === false) {
-      detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+  if (info) {
+    if (data.available) {
+      // Tesseract ships bundled with the app, so confirming "it's installed" is
+      // just noise. Stay silent when it works; only speak up when it's missing
+      // (Printed-only and word-box refinement genuinely won't run without it).
+      info.hidden = true;
+      info.innerHTML = "";
     } else {
-      const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
-      // No-admin path: a portable build dropped into the app-managed folder.
-      const portable = data.managed_dir
-        ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
-        : "";
-      detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+      info.hidden = false;
+      info.className = "key-info warn";
+      let detail;
+      if (data.wrapper_present === false) {
+        detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+      } else {
+        const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
+        // No-admin path: a portable build dropped into the app-managed folder.
+        const portable = data.managed_dir
+          ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
+          : "";
+        detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+      }
+      info.innerHTML =
+        `<span class="glyph" aria-hidden="true">!</span><span>${detail} Printed-only mode and word-box refinement need it; Handwriting mode still works as usual.</span>`;
     }
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
   }
   // Populate the language datalist with whatever's actually installed.
   const dl = $("tesseract-langs");

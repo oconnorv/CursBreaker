@@ -7,12 +7,13 @@ from cursbreaker.pricing import (
 )
 
 
-def test_catalog_has_the_three_curated_models():
+def test_catalog_has_the_three_curated_models_pro_first():
+    # Pro is first in the dropdown (and the saved default); lighter models follow.
     ids = [m.model for m in CATALOG]
     assert ids == [
+        "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
-        "gemini-3.1-pro-preview",
     ]
 
 
