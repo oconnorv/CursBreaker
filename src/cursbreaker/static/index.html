@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=13" />
+  <link rel="stylesheet" href="/static/styles.css?v=14" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -22,9 +22,12 @@
         <p class="tagline">Handwriting &rarr; searchable hOCR, powered by your Gemini key</p>
       </div>
     </div>
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light theme">
-      <span class="theme-icon" aria-hidden="true">&#9728;&#65039;</span><span class="theme-label">Light</span>
-    </button>
+    <div class="theme-switch" role="radiogroup" aria-label="Color theme">
+      <input type="radio" name="theme" id="theme-dark" value="dark" class="theme-radio" checked />
+      <label for="theme-dark" class="theme-seg"><span class="seg-icon" aria-hidden="true">&#127769;</span>Dark</label>
+      <input type="radio" name="theme" id="theme-light" value="light" class="theme-radio" />
+      <label for="theme-light" class="theme-seg"><span class="seg-icon" aria-hidden="true">&#9728;&#65039;</span>Light</label>
+    </div>
   </header>
 
   <main id="main" tabindex="-1">
@@ -164,6 +167,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=13"></script>
+  <script src="/static/app.js?v=14"></script>
 </body>
 </html>

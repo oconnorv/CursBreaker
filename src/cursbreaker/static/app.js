@@ -553,8 +553,10 @@ function wire() {
   // Settings disclosure (heading > button) toggle + theme switcher.
   $("settings-toggle").onclick = () =>
     setSettingsOpen($("settings-toggle").getAttribute("aria-expanded") !== "true");
-  $("theme-toggle").onclick = () =>
-    setTheme(currentTheme() === "light" ? "dark" : "light");
+  // Segmented theme control: both options visible; selecting either (click or
+  // arrow keys) applies it. Native radios fire 'change' on selection.
+  for (const r of document.querySelectorAll('input[name="theme"]'))
+    r.addEventListener("change", () => setTheme(r.value));
 
   const dlg = $("modal");
   $("modal-close").onclick = closePreview;
@@ -586,13 +588,9 @@ function setTheme(theme) {
   const root = document.documentElement;
   if (theme === "light") root.dataset.theme = "light";
   else delete root.dataset.theme;            // dark is the default (no attribute)
-  const btn = $("theme-toggle");
-  if (btn) {
-    const next = theme === "light" ? "dark" : "light";   // what the button switches to
-    btn.setAttribute("aria-label", `Switch to ${next} theme`);
-    btn.querySelector(".theme-label").textContent = next === "light" ? "Light" : "Dark";
-    btn.querySelector(".theme-icon").textContent = next === "light" ? "☀️" : "🌙";
-  }
+  // Reflect the choice in the always-visible segmented control.
+  const radio = $(theme === "light" ? "theme-light" : "theme-dark");
+  if (radio) radio.checked = true;
   try { localStorage.setItem("cb.theme", theme); } catch (e) {}
 }
 
