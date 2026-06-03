@@ -469,7 +469,7 @@ async function estimateCost() {
   } catch (e) {
     box.className = "key-info estimate-info warn";
     box.innerHTML =
-      `<span class="glyph" aria-hidden="true">!</span><span>Couldn't estimate: ${escapeHtml(e.message)}</span>`;
+      `<div class="estimate-line"><span class="glyph" aria-hidden="true">!</span><span>Couldn't estimate: ${escapeHtml(e.message)}</span></div>`;
   } finally {
     $("estimate").disabled = staged.length === 0;
   }
@@ -477,20 +477,41 @@ async function estimateCost() {
 
 function renderEstimate(d) {
   if (d.billable === false) {
-    return `<span class="glyph" aria-hidden="true">●</span><span>No Gemini tokens for these `
-      + `${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span>`;
+    return `<div class="estimate-line"><span class="glyph" aria-hidden="true">●</span>`
+      + `<span>No Gemini tokens for these ${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span></div>`;
   }
-  const withModel = d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "";
-  const head =
-    `Estimate for ${d.files} file(s), ${formatTokens(d.pages)} page(s)${withModel}: about `
-    + `<b>${formatTokens(d.input)}</b> input tokens plus ~${formatTokens(d.output)} output tokens `
-    + `(assuming ~${formatTokens(d.assumed_output_tokens_per_call)} output tokens across `
-    + `${formatTokens(d.calls)} API call(s)).`;
-  const cost = costDisclaimerHtml(d);
-  const caveat =
-    ` <span class="muted">Input is measured from the first page of each file; output length varies, `
-    + `so treat this as a ballpark &mdash; the live counter shows the real usage during the run.</span>`;
-  return `<span class="glyph" aria-hidden="true">&#8776;</span><span>${head}${cost}${caveat}</span>`;
+  const hasCost = d.cost !== null && d.cost !== undefined;
+  // Headline figure, large: the estimated cost -- or the token total when a
+  // model has no published price, so there's still something prominent up top.
+  const headline = hasCost
+    ? `<div class="estimate-cost"><span class="estimate-cost-num">~${formatCost(d.cost)}</span>`
+      + `<span class="estimate-cost-label">estimated cost &mdash; not a guarantee</span></div>`
+    : `<div class="estimate-cost"><span class="estimate-cost-num">${formatTokens(d.total)}</span>`
+      + `<span class="estimate-cost-label">tokens &mdash; no published price for this model</span></div>`;
+  // Supporting detail as bullets rather than a paragraph.
+  const points = [];
+  points.push(
+    `<b>${d.files}</b> file(s), <b>${formatTokens(d.pages)}</b> page(s)`
+    + (d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "")
+  );
+  points.push(
+    `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output)}</b> output tokens`
+    + ` <span class="muted">(~${formatTokens(d.assumed_output_tokens_per_call)}/call across ${formatTokens(d.calls)} call(s))</span>`
+  );
+  if (hasCost) {
+    points.push(
+      `Priced at ${priceBasis(d)}`
+      + (d.prices_as_of ? `, prices as of ${escapeHtml(d.prices_as_of)}` : "")
+      + ` &mdash; <a href="${PRICING_URL}" target="_blank" rel="noopener noreferrer">check live pricing</a>`
+    );
+  }
+  points.push(
+    `<span class="muted">Token counts are exact; the dollar amount is an estimate. Input is measured `
+    + `from the first page of each file and output length varies, so treat it as a ballpark &mdash; the `
+    + `live counter shows real usage during the run.</span>`
+  );
+  const lis = points.map((p) => `<li>${p}</li>`).join("");
+  return `${headline}<ul class="estimate-points">${lis}</ul>`;
 }
 
 // ---- misc --------------------------------------------------------------- //
