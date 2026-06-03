@@ -334,3 +334,103 @@ def test_key_status_reports_invalid_revoked_key(monkeypatch):
     r = client.get("/api/key-status").json()
     assert r["state"] == "invalid"
     assert r["message"]
+
+
+# --- token usage + cost estimate ----------------------------------------- #
+
+def test_job_status_includes_token_fields(png_path):
+    client.post("/api/settings", json={"use_mock": True, "mode": "two_pass"})
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    started = client.post("/api/process", json={"file_ids": [file_id]}).json()
+    status = _wait_done(started["job_id"])
+
+    assert "tokens" in status
+    for k in ("input", "output", "thinking", "total", "calls", "cost"):
+        assert k in status["tokens"]
+    # Demo mode makes no real call, so nothing is billed.
+    assert status["tokens"]["calls"] == 0
+    assert status["results"][0]["tokens"]["total"] == 0
+    # The internal provider handle must never be serialized to the client.
+    assert "_provider" not in status
+
+
+def test_estimate_not_billable_in_demo_mode(png_path):
+    client.post("/api/settings", json={"use_mock": True})
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
+    assert r["billable"] is False
+    assert r["total"] == 0
+    assert r["cost"] is None
+
+
+def test_estimate_requires_key_when_billable(png_path):
+    client.post("/api/settings", json={"use_mock": False, "content_type": "handwriting"})
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    r = client.post("/api/estimate", json={"file_ids": [file_id]})
+    assert r.status_code == 400  # no key, no demo mode -> can't estimate Gemini cost
+
+
+def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
+    from cursbreaker import server
+    from cursbreaker.gemini_client import MockProvider
+
+    class _P(MockProvider):
+        def count_input_tokens(self, image_png, mime="image/png"):
+            return 1000
+
+    client.post(
+        "/api/settings",
+        json={
+            "use_mock": False,
+            "content_type": "handwriting",
+            "mode": "one_pass",
+            "price_input_per_mtok": 1.0,
+            "price_output_per_mtok": 1.0,
+            "api_key": "AIza_estimate_test_key_WXYZ",
+        },
+    )
+    monkeypatch.setattr(server, "make_provider", lambda s: _P())
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
+    assert r["billable"] is True
+    assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
+    assert r["cost"] is not None       # prices set -> a dollar figure is returned
+    assert r["price_input_per_mtok"] == 1.0
+
+
+def test_estimate_no_staged_files_is_400():
+    r = client.post("/api/estimate", json={"file_ids": ["nope"]})
+    assert r.status_code == 400
+
+
+def test_price_fields_round_trip_through_settings_api():
+    r = client.post(
+        "/api/settings",
+        json={"price_input_per_mtok": 1.25, "price_output_per_mtok": 5.0},
+    ).json()
+    assert r["price_input_per_mtok"] == 1.25
+    assert r["price_output_per_mtok"] == 5.0
+
+
+def test_index_has_cost_controls():
+    html = client.get("/").text
+    assert 'id="estimate"' in html
+    assert 'id="price_input_per_mtok"' in html
+    assert 'id="price_output_per_mtok"' in html
+    assert 'id="token-text"' in html

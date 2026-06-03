@@ -198,3 +198,97 @@ def test_transient_exhausted_gives_actionable_error(monkeypatch):
     msg = str(ei.value).lower()
     assert "timed out" in msg or "unavailable" in msg
     assert "max image dimension" in msg            # actionable, not a raw 503
+
+
+# --- token usage accounting ---------------------------------------------- #
+
+def test_call_accumulates_token_usage():
+    from types import SimpleNamespace
+
+    def behavior(model):
+        return SimpleNamespace(
+            text="ok",
+            parsed=None,
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=300,
+                candidates_token_count=40,
+                thoughts_token_count=10,
+                total_token_count=350,
+            ),
+        )
+
+    prov, _ = _provider("gemini-2.5-pro", behavior)
+    assert prov.usage.calls == 0  # nothing billed before the first call
+    prov.transcribe_text(b"img")
+    assert prov.usage.input == 300
+    assert prov.usage.output == 40
+    assert prov.usage.thinking == 10
+    assert prov.usage.calls == 1
+    # A second page accumulates onto the running total.
+    prov.transcribe_text(b"img")
+    assert prov.usage.calls == 2
+    assert prov.usage.input == 600
+
+
+def test_failed_retried_attempts_are_not_billed(monkeypatch):
+    # Only the successful response carries usage; the two 503s before it do not.
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def behavior(model):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _Err(503, "UNAVAILABLE. Deadline expired.")
+        return SimpleNamespace(
+            text="ok",
+            parsed=None,
+            usage_metadata={"prompt_token_count": 100, "candidates_token_count": 5},
+        )
+
+    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov.transcribe_text(b"img")
+    assert prov.usage.calls == 1          # one billed call despite two retries
+    assert prov.usage.input == 100
+
+
+def test_count_input_tokens_uses_count_tokens_endpoint():
+    from types import SimpleNamespace
+
+    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-2.5-pro"))
+    seen = {}
+
+    class _Models:
+        def count_tokens(self, model, contents):
+            seen["model"] = model
+            seen["contents"] = contents
+            return SimpleNamespace(total_tokens=1234)
+
+    prov.client = SimpleNamespace(models=_Models())
+    assert prov.count_input_tokens(b"imgbytes") == 1234
+    assert seen["model"] == "gemini-2.5-pro"
+    # The transcription prompt + the image are what get measured.
+    assert any("paleographer" in str(c).lower() for c in seen["contents"])
+
+
+def test_count_input_tokens_returns_zero_on_failure():
+    from types import SimpleNamespace
+
+    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-2.5-pro"))
+
+    class _Models:
+        def count_tokens(self, model, contents):
+            raise RuntimeError("network down")
+
+    prov.client = SimpleNamespace(models=_Models())
+    assert prov.count_input_tokens(b"x") == 0  # never blocks the estimate
+
+
+def test_mock_provider_tracks_zero_usage():
+    prov = gemini_client.MockProvider()
+    prov.transcribe_text(b"img")
+    # Demo mode makes no real call, so nothing is billed.
+    assert prov.usage.total == 0
+    assert prov.usage.calls == 0
+    assert prov.count_input_tokens(b"img") == 0

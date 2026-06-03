@@ -7,7 +7,12 @@ from cursbreaker.config import Settings
 from cursbreaker.gemini_client import MockProvider
 from cursbreaker.hocr import XHTML_NS
 from cursbreaker.models import LineBox
-from cursbreaker.pipeline import process_batch, process_file, process_page
+from cursbreaker.pipeline import (
+    estimate_usage,
+    process_batch,
+    process_file,
+    process_page,
+)
 
 NS = {"x": XHTML_NS}
 
@@ -215,3 +220,91 @@ def test_refine_word_boxes_label_in_hocr(tmp_path):
     process_file(page, _MatchingProvider(), settings, out)
     hocr = (out / f"{page.stem}.hocr").read_text("utf-8")
     assert "handwriting/two_pass+wordboxes" in hocr
+
+
+# --- token usage + cost estimate ----------------------------------------- #
+
+class _BillingProvider(MockProvider):
+    """A mock that 'bills' a fixed amount per Gemini call so token deltas are
+    non-zero, and reports a fixed input-token count for estimates."""
+
+    def transcribe_text(self, image_png, mime="image/png"):
+        self.usage.add_response({"prompt_token_count": 100, "candidates_token_count": 20})
+        return super().transcribe_text(image_png, mime)
+
+    def detect_lines(self, image_png, mime="image/png"):
+        self.usage.add_response({"prompt_token_count": 100, "candidates_token_count": 5})
+        return super().detect_lines(image_png, mime)
+
+    def transcribe_with_boxes(self, image_png, mime="image/png"):
+        self.usage.add_response({"prompt_token_count": 100, "candidates_token_count": 25})
+        return super().transcribe_with_boxes(image_png, mime)
+
+    def count_input_tokens(self, image_png, mime="image/png"):
+        return 500
+
+
+def test_process_file_records_per_file_token_usage(png_path, tmp_path):
+    out = tmp_path / "out"
+    prov = _BillingProvider()
+    settings = Settings(use_mock=True, content_type="handwriting", mode="two_pass")
+    result = process_file(png_path, prov, settings, out)
+    # Two-pass on one page = transcribe + detect = 2 calls.
+    assert result.token_usage.calls == 2
+    assert result.token_usage.input == 200
+    assert result.token_usage.output == 25
+
+
+def test_per_file_usage_is_a_delta_not_the_running_total(png_path, tmp_path):
+    out = tmp_path / "out"
+    prov = _BillingProvider()  # shared across both files
+    settings = Settings(use_mock=True, content_type="handwriting", mode="one_pass")
+    first = process_file(png_path, prov, settings, out)
+    second = process_file(png_path, prov, settings, out)
+    # Each file reports only its own one call, even though the provider's
+    # running total has grown to two.
+    assert first.token_usage.calls == 1
+    assert second.token_usage.calls == 1
+    assert prov.usage.calls == 2
+
+
+def test_estimate_text_mode_is_free(png_path):
+    d = estimate_usage([png_path], _BillingProvider(), Settings(content_type="text"))
+    assert d["calls"] == 0
+    assert d["input"] == 0
+    assert d["output"] == 0
+    assert d["cost"] is None
+
+
+def test_estimate_counts_two_calls_per_page_in_two_pass(png_path):
+    settings = Settings(content_type="handwriting", mode="two_pass")
+    d = estimate_usage([png_path], _BillingProvider(), settings)
+    assert d["pages"] == 1
+    assert d["calls"] == 2                 # transcribe + detect
+    assert d["input"] == 500 * 1 * 2       # per-page input * pages * calls
+    assert d["cost"] is None               # no prices set -> tokens only
+
+
+def test_estimate_scales_input_by_page_count(pdf_path):
+    settings = Settings(content_type="handwriting", mode="one_pass", pdf_dpi=120)
+    d = estimate_usage([pdf_path], _BillingProvider(), settings)
+    assert d["pages"] == 2
+    assert d["calls"] == 2                  # 2 pages * 1 call
+    assert d["input"] == 500 * 2 * 1        # first-page count scaled by 2 pages
+
+
+def test_estimate_with_prices_returns_transparent_cost(png_path):
+    settings = Settings(
+        content_type="handwriting",
+        mode="one_pass",
+        price_input_per_mtok=2.0,
+        price_output_per_mtok=10.0,
+    )
+    d = estimate_usage([png_path], _BillingProvider(), settings)
+    # input = 500 tokens; assumed output = 800 tokens (one call).
+    expected = 500 / 1_000_000 * 2.0 + 800 / 1_000_000 * 10.0
+    assert d["cost"] == pytest.approx(expected)
+    # Prices used are echoed back so the UI can show what it computed with.
+    assert d["price_input_per_mtok"] == 2.0
+    assert d["price_output_per_mtok"] == 10.0
+    assert d["assumed_output_tokens_per_call"] > 0
