@@ -282,7 +282,6 @@ def test_estimate_counts_two_calls_per_page_in_two_pass(png_path):
     assert d["pages"] == 1
     assert d["calls"] == 2                 # transcribe + detect
     assert d["input"] == 500 * 1 * 2       # per-page input * pages * calls
-    assert d["cost"] is None               # no prices set -> tokens only
 
 
 def test_estimate_scales_input_by_page_count(pdf_path):
@@ -293,18 +292,29 @@ def test_estimate_scales_input_by_page_count(pdf_path):
     assert d["input"] == 500 * 2 * 1        # first-page count scaled by 2 pages
 
 
-def test_estimate_with_prices_returns_transparent_cost(png_path):
+def test_estimate_prices_automatically_from_selected_model(png_path):
+    # Flat-priced model: cost comes straight from the catalog, no manual entry.
     settings = Settings(
         content_type="handwriting",
         mode="one_pass",
-        price_input_per_mtok=2.0,
-        price_output_per_mtok=10.0,
+        transcription_model="gemini-3.5-flash",  # $1.50 in / $9.00 out
     )
     d = estimate_usage([png_path], _BillingProvider(), settings)
     # input = 500 tokens; assumed output = 800 tokens (one call).
-    expected = 500 / 1_000_000 * 2.0 + 800 / 1_000_000 * 10.0
+    expected = 500 / 1_000_000 * 1.50 + 800 / 1_000_000 * 9.00
     assert d["cost"] == pytest.approx(expected)
-    # Prices used are echoed back so the UI can show what it computed with.
-    assert d["price_input_per_mtok"] == 2.0
-    assert d["price_output_per_mtok"] == 10.0
+    # The model + the rates it used are echoed back for the UI to display.
+    assert d["model"] == "gemini-3.5-flash"
+    assert d["price_input_per_mtok"] == 1.50
+    assert d["price_output_per_mtok"] == 9.00
+    assert d["prices_as_of"]
     assert d["assumed_output_tokens_per_call"] > 0
+
+
+def test_estimate_no_cost_for_uncatalogued_model(png_path):
+    settings = Settings(
+        content_type="handwriting", mode="one_pass", transcription_model="some-old-model"
+    )
+    d = estimate_usage([png_path], _BillingProvider(), settings)
+    assert d["cost"] is None            # unknown price -> tokens only, no dollars
+    assert d["input"] == 500

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=10" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -71,17 +71,11 @@
             <label class="radio"><input type="checkbox" id="refine_word_boxes" /> <b>Refine word positions with Tesseract</b> &mdash; keeps Gemini's transcription as the text; uses Tesseract only to place words more precisely where they agree. Needs Tesseract; improves word location, never the wording.</label>
           </fieldset>
 
-          <div class="grid2">
-            <label class="field">
-              <span>Transcription model</span>
-              <input id="transcription_model" list="model-list" />
-            </label>
-            <label class="field">
-              <span>Detection model (two-pass)</span>
-              <input id="detection_model" list="model-list" />
-            </label>
-          </div>
-          <datalist id="model-list"></datalist>
+          <label class="field">
+            <span>Model</span>
+            <select id="model" aria-describedby="model-pricing"></select>
+          </label>
+          <p id="model-pricing" class="hint" role="status" aria-live="polite"></p>
 
           <details class="advanced">
             <summary>Advanced</summary>
@@ -106,10 +100,7 @@
                 <input id="tesseract_language" list="tesseract-langs" placeholder="eng" />
                 <datalist id="tesseract-langs"></datalist>
               </label>
-              <label class="field"><span>Price: input $ / 1M tokens</span><input type="number" id="price_input_per_mtok" step="0.01" min="0" /></label>
-              <label class="field"><span>Price: output $ / 1M tokens</span><input type="number" id="price_output_per_mtok" step="0.01" min="0" /></label>
             </div>
-            <p class="hint">Prices feed only the <em>local</em> cost estimate &mdash; they're never sent anywhere. Leave them at 0 to see token counts without dollars. Rates vary by model and change over time; check the current numbers at <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">Google's Gemini API pricing</a>.</p>
             <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
           </details>
         </div>
@@ -171,6 +162,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

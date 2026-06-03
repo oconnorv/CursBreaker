@@ -1,5 +1,6 @@
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cursbreaker.server import app
@@ -396,8 +397,7 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
             "use_mock": False,
             "content_type": "handwriting",
             "mode": "one_pass",
-            "price_input_per_mtok": 1.0,
-            "price_output_per_mtok": 1.0,
+            "transcription_model": "gemini-3.1-flash-lite",  # $0.25 in / $1.50 out
             "api_key": "AIza_estimate_test_key_WXYZ",
         },
     )
@@ -410,8 +410,11 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
     assert r["billable"] is True
     assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
-    assert r["cost"] is not None       # prices set -> a dollar figure is returned
-    assert r["price_input_per_mtok"] == 1.0
+    # Cost is derived automatically from the selected model's published price.
+    expected = 1000 / 1_000_000 * 0.25 + 800 / 1_000_000 * 1.50
+    assert r["cost"] == pytest.approx(expected)
+    assert r["model"] == "gemini-3.1-flash-lite"
+    assert r["price_input_per_mtok"] == 0.25
 
 
 def test_estimate_no_staged_files_is_400():
@@ -419,18 +422,42 @@ def test_estimate_no_staged_files_is_400():
     assert r.status_code == 400
 
 
-def test_price_fields_round_trip_through_settings_api():
+def test_models_endpoint_returns_priced_catalog():
+    body = client.get("/api/models").json()
+    ids = [m["id"] for m in body["models"]]
+    assert "gemini-3.1-pro-preview" in ids
+    assert "gemini-3.5-flash" in ids
+    assert "gemini-3.1-flash-lite" in ids
+    assert body["prices_as_of"]            # shown in the UI for transparency
+    flash = next(m for m in body["models"] if m["id"] == "gemini-3.5-flash")
+    assert flash["input_per_mtok"] == 1.50 and flash["output_per_mtok"] == 9.00
+    pro = next(m for m in body["models"] if m["id"] == "gemini-3.1-pro-preview")
+    assert pro["tier_threshold"] == 200_000   # tiered pricing is exposed
+
+
+def test_model_choice_round_trips_through_settings_api():
     r = client.post(
-        "/api/settings",
-        json={"price_input_per_mtok": 1.25, "price_output_per_mtok": 5.0},
+        "/api/settings", json={"transcription_model": "gemini-3.5-flash"}
     ).json()
-    assert r["price_input_per_mtok"] == 1.25
-    assert r["price_output_per_mtok"] == 5.0
+    assert r["transcription_model"] == "gemini-3.5-flash"
+
+
+def test_detection_model_follows_transcription_model():
+    # The single picker is enforced server-side: posting only the transcription
+    # model keeps detection (two-pass) on the same model, so the priced/reported
+    # model can't drift from the one detection actually uses.
+    r = client.post(
+        "/api/settings", json={"transcription_model": "gemini-3.1-flash-lite"}
+    ).json()
+    assert r["transcription_model"] == "gemini-3.1-flash-lite"
+    assert r["detection_model"] == "gemini-3.1-flash-lite"
 
 
 def test_index_has_cost_controls():
     html = client.get("/").text
     assert 'id="estimate"' in html
-    assert 'id="price_input_per_mtok"' in html
-    assert 'id="price_output_per_mtok"' in html
+    assert 'id="model"' in html             # curated dropdown replaces free text
     assert 'id="token-text"' in html
+    # The manual price inputs are gone; pricing is automatic now.
+    assert 'id="price_input_per_mtok"' not in html
+    assert 'id="price_output_per_mtok"' not in html
