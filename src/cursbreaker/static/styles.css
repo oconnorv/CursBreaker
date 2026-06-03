@@ -176,13 +176,22 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .key-info .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
 .key-info .glyph { font-weight: 700; font-size: 15px; line-height: 1; }
 
-/* Cost estimate: a longer, wrapping message in a neutral box (a dollar figure
-   isn't "success", so it shouldn't read green). Glyph pinned to the top-left so
-   multi-line text stays aligned. The red `.warn` (errors) still wins by
+/* Cost estimate: a neutral box (a dollar figure isn't "success", so it
+   shouldn't read green) laid out top-to-bottom -- the headline cost first, then
+   the supporting detail as bullets. The red `.warn` (errors) still wins by
    specificity. */
-.estimate-info { display: flex; align-items: flex-start; line-height: 1.5;
-  background: var(--panel-2); border-color: var(--border-strong); color: var(--text); }
-.estimate-info .glyph { flex: none; margin-top: 1px; }
+.estimate-info { display: flex; flex-direction: column; align-items: stretch; gap: 10px;
+  line-height: 1.5; background: var(--panel-2); border-color: var(--border-strong); color: var(--text); }
+/* Short single-line messages (errors, "no token cost") keep the glyph + text on
+   one row inside the column. */
+.estimate-line { display: flex; align-items: flex-start; gap: 8px; }
+.estimate-line .glyph { flex: none; margin-top: 1px; }
+/* Headline: the estimated dollar figure, large, with a small caveat label. */
+.estimate-cost { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.estimate-cost-num { font-size: 30px; font-weight: 800; line-height: 1.1; letter-spacing: -.5px; }
+.estimate-cost-label { color: var(--muted); font-size: 13px; }
+.estimate-points { margin: 0; padding-left: 20px; }
+.estimate-points li { margin: 4px 0; }
 .estimate-info a { color: var(--link); text-decoration: underline; }
 .estimate-info.warn a { color: inherit; }
 
