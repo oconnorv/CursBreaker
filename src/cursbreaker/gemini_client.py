@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -142,6 +143,51 @@ def _is_model_unavailable(exc: Exception) -> bool:
     return any(m in blob for m in _MODEL_GONE_MARKERS)
 
 
+# Transient failures worth retrying with backoff: the service was momentarily
+# unavailable/overloaded, hit a deadline, or a network blip occurred -- common
+# with very large/dense images. Never auth or model-gone (handled separately).
+_TRANSIENT_MARKERS = (
+    "UNAVAILABLE", "DEADLINE", "RESOURCE_EXHAUSTED", "INTERNAL", "OVERLOADED",
+    "TIMEOUT", "TIMED OUT", "TEMPORARILY", "CONNECTION", "RESET BY PEER",
+)
+# A dense map scan can legitimately take minutes, and a one-off 503/deadline
+# usually clears on a retry.
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0          # seconds; doubles each attempt (2, 4, 8)
+_REQUEST_TIMEOUT_MS = 300_000    # 5-minute client timeout for slow, large images
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True for retryable service/timeout errors (503 UNAVAILABLE, deadline
+    exceeded, 429, 5xx, network blips) -- but never for auth or model-gone."""
+    if _is_auth_error(exc) or _is_model_unavailable(exc):
+        return False
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in (408, 429, 500, 502, 503, 504):
+        return True
+    blob = f"{getattr(exc, 'message', '')} {type(exc).__name__} {exc}".upper()
+    return any(m in blob for m in _TRANSIENT_MARKERS)
+
+
+def _short_error(exc: Exception) -> str:
+    """A compact one-line version of an SDK error (drops the JSON blob)."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None) or ""
+    msg = str(getattr(exc, "message", "") or exc).split("{", 1)[0].strip()
+    return f"{code} {msg}".strip()[:140] or "error"
+
+
+def _transient_message(exc: Exception) -> str:
+    """Actionable guidance when retries are exhausted on a transient error."""
+    return (
+        f"Gemini was unavailable or timed out ({_short_error(exc)}). This often "
+        "happens with very large or dense images -- a high-resolution map or "
+        "scan is a common cause. Try again; if it keeps happening, lower 'Max "
+        "image dimension' in Advanced (e.g. 3000-4000) and/or set 'Media "
+        "resolution' to medium so each request is lighter. For a printed map you "
+        "can also use 'Printed only' mode, which runs locally with no API call."
+    )
+
+
 def _probe_models(key: str) -> None:
     """One ListModels request to verify a key. Free -- it returns metadata only,
     spending no generation tokens or quota. Returns on success; raises on
@@ -195,7 +241,17 @@ class GeminiProvider:
             )
         self.settings = settings
         self._genai = genai
-        self.client = genai.Client(api_key=api_key)
+        # A generous client timeout so one slow (large/dense) image isn't cut off
+        # early; tolerate SDK variations in the option's shape.
+        try:
+            from google.genai import types
+
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=_REQUEST_TIMEOUT_MS),
+            )
+        except Exception:
+            self.client = genai.Client(api_key=api_key)
         # Models that returned "not found" this session; skip re-trying them and
         # go straight to a fallback so we don't repeat the failed call per page.
         self._dead_models: set[str] = set()
@@ -259,16 +315,21 @@ class GeminiProvider:
             try:
                 return self._invoke(m, prompt, image_png, mime, schema)
             except Exception as exc:
-                if not _is_model_unavailable(exc):
-                    raise  # a real error -- don't mask it by trying other models
-                self._dead_models.add(m)
-                last_exc = exc
-                if m != candidates[-1]:
-                    print(
-                        f"WARNING: Gemini model '{m}' is unavailable (it may have "
-                        "been retired); falling back to another model.",
-                        file=sys.stderr,
-                    )
+                if _is_model_unavailable(exc):
+                    self._dead_models.add(m)
+                    last_exc = exc
+                    if m != candidates[-1]:
+                        print(
+                            f"WARNING: Gemini model '{m}' is unavailable (it may "
+                            "have been retired); falling back to another model.",
+                            file=sys.stderr,
+                        )
+                    continue
+                if _is_transient(exc):
+                    # _invoke already retried with backoff; give actionable
+                    # guidance rather than surfacing a raw 503/deadline.
+                    raise RuntimeError(_transient_message(exc)) from exc
+                raise  # auth / bad request / etc. -- surface unchanged
         raise RuntimeError(
             "The configured Gemini model is unavailable and no fallback worked "
             f"(tried: {', '.join(candidates)}). It may have been retired -- pick "
@@ -292,18 +353,35 @@ class GeminiProvider:
         contents = [prompt, part]
         try:
             cfg = self._config(types, schema=schema, minimal=False)
-            return self.client.models.generate_content(
-                model=model, contents=contents, config=cfg
-            )
+            return self._call(model, contents, cfg)
         except Exception as exc:
-            if _is_model_unavailable(exc):
-                raise
+            if _is_model_unavailable(exc) or _is_transient(exc):
+                raise  # model fallback / already-retried transient: no minimal retry
             # Optional knobs (thinking/media resolution) aren't supported by
             # every model; retry once with a minimal config before giving up.
             cfg = self._config(types, schema=schema, minimal=True)
-            return self.client.models.generate_content(
-                model=model, contents=contents, config=cfg
-            )
+            return self._call(model, contents, cfg)
+
+    def _call(self, model, contents, cfg):
+        """``generate_content`` with exponential backoff on transient failures
+        (503/UNAVAILABLE, deadline-exceeded, 429, 5xx, network blips). A retried
+        success keeps a one-off timeout from killing the whole job."""
+        delay = _RETRY_BASE_DELAY
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return self.client.models.generate_content(
+                    model=model, contents=contents, config=cfg
+                )
+            except Exception as exc:
+                if attempt >= _MAX_RETRIES or not _is_transient(exc):
+                    raise
+                print(
+                    f"WARNING: Gemini call failed ({_short_error(exc)}); retrying "
+                    f"in {delay:.0f}s ({attempt + 1}/{_MAX_RETRIES})…",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                delay *= 2
 
     def _config(self, types, *, schema, minimal: bool):
         kwargs: dict = {

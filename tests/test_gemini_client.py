@@ -155,3 +155,46 @@ def test_generate_does_not_mask_real_errors_with_fallback():
     assert "invalid_argument" in str(ei.value).lower()
     # Only the configured model is tried (full + minimal retry) -- never a fallback.
     assert set(prov.client.models.calls) == {"gemini-2.5-pro"}
+
+
+# --- transient-failure retries (e.g. 503 deadline on big/dense images) ----- #
+
+def test_is_transient_classification():
+    assert gemini_client._is_transient(_Err(503, "UNAVAILABLE. Deadline expired before operation could complete."))
+    assert gemini_client._is_transient(_Err(429, "RESOURCE_EXHAUSTED"))
+    assert gemini_client._is_transient(_Err(500, "INTERNAL"))
+    assert gemini_client._is_transient(ConnectionError("connection reset by peer"))
+    # NOT transient: real client errors, auth, and model-gone are handled elsewhere.
+    assert not gemini_client._is_transient(_Err(400, "INVALID_ARGUMENT: bad image"))
+    assert not gemini_client._is_transient(_Err(403, "PERMISSION_DENIED"))
+    assert not gemini_client._is_transient(_Err(404, "model is no longer available"))
+
+
+def test_call_retries_transient_then_succeeds(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda *_: None)  # no real waiting
+    calls = {"n": 0}
+
+    def behavior(model):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _Err(503, "UNAVAILABLE. Deadline expired before operation could complete.")
+        return SimpleNamespace(text="ok", parsed=None)
+
+    prov, _ = _provider("gemini-2.5-pro", behavior)
+    assert prov.transcribe_text(b"img") == "ok"   # succeeds despite two 503s
+    assert calls["n"] == 3                          # two retries, then success
+
+
+def test_transient_exhausted_gives_actionable_error(monkeypatch):
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda *_: None)
+
+    def behavior(model):
+        raise _Err(503, "UNAVAILABLE. Deadline expired before operation could complete.")
+
+    prov, _ = _provider("gemini-2.5-pro", behavior)
+    with pytest.raises(RuntimeError) as ei:
+        prov.transcribe_text(b"img")
+    msg = str(ei.value).lower()
+    assert "timed out" in msg or "unavailable" in msg
+    assert "max image dimension" in msg            # actionable, not a raw 503
