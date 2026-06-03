@@ -94,19 +94,32 @@ h1 { margin: 0; font-size: 22px; }
 .theme-toggle:hover { border-color: var(--link); }
 .theme-icon { font-size: 14px; line-height: 1; }
 
+/* Wide screens: Settings becomes a sidebar (holding the key/Tesseract status
+   and all config) so the working area -- upload, estimate, progress, results --
+   starts at the top of the main column instead of below a tall form. The page
+   widens to use the side margins; narrow screens fall back to a single stack. */
 main {
-  max-width: 880px; margin: 0 auto; padding: 8px 20px 60px;
-  display: flex; flex-direction: column; gap: 18px;
+  max-width: 1160px; margin: 0 auto; padding: 8px 20px 60px;
+  display: grid; grid-template-columns: 360px minmax(0, 1fr);
+  align-items: start; gap: 18px;
+}
+.work-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+/* Keep the settings/status sidebar in view while the results column scrolls. */
+#settings-card { position: sticky; top: 12px; }
+
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; max-width: 880px; }
+  #settings-card { position: static; }
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 18px;
   box-shadow: var(--shadow);
 }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .card-head h2 { margin: 0; font-size: 16px; flex: 1; }
 
 /* Collapsible Settings card: a heading containing a button (the ARIA disclosure
@@ -135,7 +148,7 @@ main {
   .topbar { padding: 14px 16px; }
 }
 
-.field { display: block; margin: 12px 0; }
+.field { display: block; margin: 10px 0; }
 .field > span, .field > label, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .hint { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
