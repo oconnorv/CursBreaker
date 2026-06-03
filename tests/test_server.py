@@ -18,6 +18,20 @@ def _wait_done(job_id, timeout=10.0):
     raise AssertionError("job did not finish in time")
 
 
+@pytest.fixture
+def run_with_mock(monkeypatch):
+    """Run real jobs with the deterministic MockProvider -- no network or live
+    key. Demo mode no longer exists, so tests opt into the mock explicitly by
+    stubbing the provider factory and storing a dummy key so the 'no key' guard
+    passes (the dummy is never validated, since make_provider is replaced)."""
+    from cursbreaker import server
+    from cursbreaker.gemini_client import MockProvider
+
+    monkeypatch.setattr(server, "make_provider", lambda s: MockProvider())
+    client.post("/api/settings", json={"api_key": "AIza_test_dummy_key_ABCDEF"})
+    return MockProvider
+
+
 def test_settings_hides_key_and_roundtrips():
     r = client.get("/api/settings").json()
     assert r["api_key_set"] is False
@@ -25,8 +39,7 @@ def test_settings_hides_key_and_roundtrips():
     assert r["api_key_hint"] == ""
     assert r["api_key_source"] is None
 
-    r2 = client.post("/api/settings", json={"use_mock": True, "mode": "one_pass"}).json()
-    assert r2["use_mock"] is True
+    r2 = client.post("/api/settings", json={"mode": "one_pass"}).json()
     assert r2["mode"] == "one_pass"
 
 
@@ -56,8 +69,8 @@ def test_env_var_overrides_and_is_reported_as_source(monkeypatch):
     assert r["api_key_hint"].endswith("ENDS")
 
 
-def test_full_flow_with_mock(png_path):
-    client.post("/api/settings", json={"use_mock": True, "mode": "two_pass"})
+def test_full_flow(run_with_mock, png_path):
+    client.post("/api/settings", json={"mode": "two_pass"})
 
     with open(png_path, "rb") as fh:
         up = client.post(
@@ -107,8 +120,8 @@ def test_upload_rejects_unsupported_types(tmp_path):
     assert r.status_code == 400
 
 
-def test_process_requires_key_when_not_mock(png_path):
-    client.post("/api/settings", json={"use_mock": False})
+def test_process_requires_key(png_path):
+    # Isolated config has no stored key and no ambient env key -> 400.
     with open(png_path, "rb") as fh:
         up = client.post(
             "/api/upload", files={"files": ("sample.png", fh, "image/png")}
@@ -185,6 +198,18 @@ def test_index_has_content_type_selector_and_tesseract_status():
     # A visible status block + a place to pick a Tesseract language.
     assert 'id="tesseract-info"' in html
     assert 'id="tesseract_language"' in html
+
+
+def test_demo_mode_is_gone():
+    # The user-facing demo/mock mode was removed entirely.
+    html = client.get("/").text
+    assert 'id="use_mock"' not in html
+    assert "Demo mode" not in html
+    # ...and it isn't a setting the API exposes or accepts.
+    settings = client.get("/api/settings").json()
+    assert "use_mock" not in settings
+    client.post("/api/settings", json={"use_mock": True})
+    assert "use_mock" not in client.get("/api/settings").json()
 
 
 def test_heartbeat_endpoint_updates_timestamp():
@@ -316,11 +341,6 @@ def test_key_status_no_key_by_default():
     assert client.get("/api/key-status").json()["state"] == "no_key"
 
 
-def test_key_status_mock_when_demo_mode():
-    client.post("/api/settings", json={"use_mock": True})
-    assert client.get("/api/key-status").json()["state"] == "mock"
-
-
 def test_key_status_reports_invalid_revoked_key(monkeypatch):
     from cursbreaker import gemini_client
 
@@ -339,8 +359,8 @@ def test_key_status_reports_invalid_revoked_key(monkeypatch):
 
 # --- token usage + cost estimate ----------------------------------------- #
 
-def test_job_status_includes_token_fields(png_path):
-    client.post("/api/settings", json={"use_mock": True, "mode": "two_pass"})
+def test_job_status_includes_token_fields(run_with_mock, png_path):
+    client.post("/api/settings", json={"mode": "two_pass"})
     with open(png_path, "rb") as fh:
         up = client.post(
             "/api/upload", files={"files": ("sample.png", fh, "image/png")}
@@ -352,15 +372,16 @@ def test_job_status_includes_token_fields(png_path):
     assert "tokens" in status
     for k in ("input", "output", "thinking", "total", "calls", "cost"):
         assert k in status["tokens"]
-    # Demo mode makes no real call, so nothing is billed.
+    # MockProvider makes no real call, so nothing is billed.
     assert status["tokens"]["calls"] == 0
     assert status["results"][0]["tokens"]["total"] == 0
     # The internal provider handle must never be serialized to the client.
     assert "_provider" not in status
 
 
-def test_estimate_not_billable_in_demo_mode(png_path):
-    client.post("/api/settings", json={"use_mock": True})
+def test_estimate_not_billable_for_printed_only(png_path):
+    # Printed-only runs locally (Tesseract), so there's no Gemini token cost.
+    client.post("/api/settings", json={"content_type": "text"})
     with open(png_path, "rb") as fh:
         up = client.post(
             "/api/upload", files={"files": ("sample.png", fh, "image/png")}
@@ -368,19 +389,20 @@ def test_estimate_not_billable_in_demo_mode(png_path):
     file_id = up["files"][0]["id"]
     r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
     assert r["billable"] is False
+    assert "Printed-only" in r["reason"]
     assert r["total"] == 0
     assert r["cost"] is None
 
 
 def test_estimate_requires_key_when_billable(png_path):
-    client.post("/api/settings", json={"use_mock": False, "content_type": "handwriting"})
+    client.post("/api/settings", json={"content_type": "handwriting"})
     with open(png_path, "rb") as fh:
         up = client.post(
             "/api/upload", files={"files": ("sample.png", fh, "image/png")}
         ).json()
     file_id = up["files"][0]["id"]
     r = client.post("/api/estimate", json={"file_ids": [file_id]})
-    assert r.status_code == 400  # no key, no demo mode -> can't estimate Gemini cost
+    assert r.status_code == 400  # no key -> can't estimate Gemini cost
 
 
 def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
@@ -394,7 +416,6 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     client.post(
         "/api/settings",
         json={
-            "use_mock": False,
             "content_type": "handwriting",
             "mode": "one_pass",
             "transcription_model": "gemini-3.1-flash-lite",  # $0.25 in / $1.50 out

@@ -22,7 +22,7 @@ async function api(method, url, body) {
 // ---- settings ----------------------------------------------------------- //
 const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
 const TEXT = ["thinking_level", "media_resolution", "tesseract_language"];
-const BOOL = ["use_mock", "preprocess", "refine_word_boxes"];
+const BOOL = ["preprocess", "refine_word_boxes"];
 
 function gatherSettings() {
   const s = {};
@@ -46,12 +46,7 @@ function applyKeyStatus(data) {
   const badge = $("key-status");
   const info = $("key-info");
   info.hidden = false;
-  if (data.use_mock) {
-    badge.textContent = "Demo mode"; badge.className = "badge ok";
-    info.className = "key-info";
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">●</span><span>Demo mode is on — no real API call will be made.</span>`;
-  } else if (data.api_key_set) {
+  if (data.api_key_set) {
     badge.textContent = "Key saved"; badge.className = "badge ok";
     info.className = "key-info";
     const where = data.api_key_source === "env"
@@ -70,7 +65,7 @@ function applyKeyStatus(data) {
 // Free, proactive check that a stored key still works. ListModels costs no
 // generation tokens/quota, so a revoked/expired key is caught here in Settings
 // instead of failing mid-transcription. Only "valid"/"invalid" change the
-// badge; "unknown" (offline/transient) and "no_key"/"mock" leave it untouched.
+// badge; "unknown" (offline/transient) and "no_key" leave it untouched.
 async function verifyKey() {
   let data;
   try { data = await api("GET", "/api/key-status"); }
@@ -106,7 +101,7 @@ async function loadSettings() {
   const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
   if (ctRadio) ctRadio.checked = true;
   applyKeyStatus(s);
-  verifyKey(); // background-verify the stored key (no-op when none/mock)
+  verifyKey(); // background-verify the stored key (no-op when no key set)
 }
 
 async function loadTesseractStatus() {

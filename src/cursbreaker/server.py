@@ -179,13 +179,11 @@ async def upload(files: list[UploadFile] = File(...)):
 class ProcessRequest(BaseModel):
     file_ids: list[str]
     mode: str | None = None
-    use_mock: bool | None = None
 
 
 class EstimateRequest(BaseModel):
     file_ids: list[str]
     mode: str | None = None
-    use_mock: bool | None = None
 
 
 @app.post("/api/estimate")
@@ -201,16 +199,13 @@ def estimate(req: EstimateRequest):
     settings = load_settings()
     if req.mode in ("one_pass", "two_pass"):
         settings.mode = req.mode
-    if req.use_mock is not None:
-        settings.use_mock = req.use_mock
 
     content = (settings.content_type or "handwriting").lower()
-    # No Gemini call -> no token cost. Say so plainly instead of guessing.
-    if settings.use_mock or content == "text":
-        reason = "demo mode" if settings.use_mock else "Printed-only mode"
+    # Printed-only runs locally (Tesseract) with no Gemini call -> no token cost.
+    if content == "text":
         return {
             "billable": False,
-            "reason": reason,
+            "reason": "Printed-only mode",
             "files": len(paths),
             "input": 0,
             "output": 0,
@@ -221,7 +216,7 @@ def estimate(req: EstimateRequest):
 
     if not settings.resolved_api_key():
         raise HTTPException(
-            400, "No Gemini API key set. Add one in Settings or enable demo mode."
+            400, "No Gemini API key set. Add one in Settings to estimate cost."
         )
 
     try:
@@ -242,10 +237,8 @@ def process(req: ProcessRequest):
     settings = load_settings()
     if req.mode in ("one_pass", "two_pass"):
         settings.mode = req.mode
-    if req.use_mock is not None:
-        settings.use_mock = req.use_mock
-    if not settings.use_mock and not settings.resolved_api_key():
-        raise HTTPException(400, "No Gemini API key set. Add one in Settings or enable mock mode.")
+    if not settings.resolved_api_key():
+        raise HTTPException(400, "No Gemini API key set. Add one in Settings.")
 
     job_id = uuid.uuid4().hex
     out_dir = JOBS_DIR / job_id

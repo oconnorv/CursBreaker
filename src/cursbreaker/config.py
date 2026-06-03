@@ -63,7 +63,6 @@ class Settings(BaseModel):
     pdf_dpi: int = 300
     max_dimension: int = 0  # 0 = keep original size; else resize longest side
     preprocess: bool = True
-    use_mock: bool = False  # exercise the full app without a real API key
 
     # --- Output ---
     word_confidence: int = 95  # x_wconf for words on detected lines

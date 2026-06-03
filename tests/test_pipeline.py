@@ -38,7 +38,7 @@ def _printed_page(tmp_path, name="printed.png", size=(900, 240)):
 @pytest.mark.parametrize("mode", ["two_pass", "one_pass"])
 def test_process_image_writes_outputs(png_path, tmp_path, mode):
     out = tmp_path / "out"
-    settings = Settings(use_mock=True, mode=mode)
+    settings = Settings(mode=mode)
     result = process_file(png_path, MockProvider(), settings, out)
 
     assert result.error is None
@@ -63,7 +63,7 @@ def test_process_image_writes_outputs(png_path, tmp_path, mode):
 
 def test_process_pdf_multipage(pdf_path, tmp_path):
     out = tmp_path / "out"
-    settings = Settings(use_mock=True, pdf_dpi=120)
+    settings = Settings(pdf_dpi=120)
     result = process_file(pdf_path, MockProvider(), settings, out)
 
     assert result.n_pages == 2
@@ -77,7 +77,7 @@ def test_process_pdf_multipage(pdf_path, tmp_path):
 
 def test_batch_isolates_failures(png_path, tmp_path):
     out = tmp_path / "out"
-    settings = Settings(use_mock=True)
+    settings = Settings()
     missing = tmp_path / "does_not_exist.png"
     results = process_batch([png_path, missing], MockProvider(), settings, out)
     assert results[0].error is None
@@ -247,7 +247,7 @@ class _BillingProvider(MockProvider):
 def test_process_file_records_per_file_token_usage(png_path, tmp_path):
     out = tmp_path / "out"
     prov = _BillingProvider()
-    settings = Settings(use_mock=True, content_type="handwriting", mode="two_pass")
+    settings = Settings(content_type="handwriting", mode="two_pass")
     result = process_file(png_path, prov, settings, out)
     # Two-pass on one page = transcribe + detect = 2 calls.
     assert result.token_usage.calls == 2
@@ -258,7 +258,7 @@ def test_process_file_records_per_file_token_usage(png_path, tmp_path):
 def test_per_file_usage_is_a_delta_not_the_running_total(png_path, tmp_path):
     out = tmp_path / "out"
     prov = _BillingProvider()  # shared across both files
-    settings = Settings(use_mock=True, content_type="handwriting", mode="one_pass")
+    settings = Settings(content_type="handwriting", mode="one_pass")
     first = process_file(png_path, prov, settings, out)
     second = process_file(png_path, prov, settings, out)
     # Each file reports only its own one call, even though the provider's

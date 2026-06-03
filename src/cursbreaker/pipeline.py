@@ -42,7 +42,7 @@ class FileResult:
     pdf_name: str | None = None
     image_names: list[str] = field(default_factory=list)
     error: str | None = None
-    # Tokens this file billed to Gemini (zero for Printed-only / demo mode).
+    # Tokens this file billed to Gemini (zero for Printed-only mode).
     token_usage: TokenUsage = field(default_factory=TokenUsage)
 
 
@@ -280,9 +280,9 @@ def estimate_usage(
     the page count -- fast, and exact enough that the user can sanity-check the
     bill. *Output* tokens can't be known until the text is generated, so they use
     a single, surfaced per-call assumption. Two-pass sends the image twice, so it
-    counts two calls per page; Printed-only/demo runs make no Gemini call and
-    estimate to zero. The returned dict is clearly labelled as an estimate by the
-    UI, which also shows the per-million prices used."""
+    counts two calls per page; Printed-only runs make no Gemini call and estimate
+    to zero. The returned dict is clearly labelled as an estimate by the UI,
+    which also shows the per-million prices used."""
     content = (settings.content_type or "handwriting").lower()
     if content == "text":
         calls_per_page = 0
