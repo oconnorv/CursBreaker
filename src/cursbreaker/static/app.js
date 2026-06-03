@@ -215,8 +215,7 @@ async function transcribe() {
   $("action-note").textContent = stagedStatus();
   // Free up screen space the moment work starts so progress + results land
   // above the fold on smaller laptops.
-  const sd = $("settings-details");
-  if (sd) sd.open = false;
+  setSettingsOpen(false);  // collapse Settings; remembers the collapsed state
   $("transcribe").disabled = true;
   $("results-card").hidden = true;
   $("results").innerHTML = "";
@@ -353,6 +352,13 @@ function wire() {
   });
 
   $("transcribe").onclick = transcribe;
+
+  // Settings disclosure (heading > button) toggle + theme switcher.
+  $("settings-toggle").onclick = () =>
+    setSettingsOpen($("settings-toggle").getAttribute("aria-expanded") !== "true");
+  $("theme-toggle").onclick = () =>
+    setTheme(currentTheme() === "light" ? "dark" : "light");
+
   const dlg = $("modal");
   $("modal-close").onclick = closePreview;
   // Clicking the backdrop (target is the dialog itself) closes it.
@@ -375,21 +381,40 @@ function bye() {
 window.addEventListener("beforeunload", bye);
 window.addEventListener("pagehide", (e) => { if (!e.persisted) bye(); });
 
-// Restore the user's last Settings open/closed choice, and remember changes.
-(function restoreSettingsPanel() {
-  const sd = $("settings-details");
-  if (!sd) return;
-  try {
-    const saved = localStorage.getItem("cb.settings.open");
-    if (saved === "0") sd.open = false;
-    else if (saved === "1") sd.open = true;
-  } catch (e) {}
-  sd.addEventListener("toggle", () => {
-    try { localStorage.setItem("cb.settings.open", sd.open ? "1" : "0"); } catch (e) {}
-  });
-})();
+// ---- theme + settings disclosure state (both persisted) ----------------- //
+function currentTheme() {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+function setTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light") root.dataset.theme = "light";
+  else delete root.dataset.theme;            // dark is the default (no attribute)
+  const btn = $("theme-toggle");
+  if (btn) {
+    const next = theme === "light" ? "dark" : "light";   // what the button switches to
+    btn.setAttribute("aria-label", `Switch to ${next} theme`);
+    btn.querySelector(".theme-label").textContent = next === "light" ? "Light" : "Dark";
+    btn.querySelector(".theme-icon").textContent = next === "light" ? "☀️" : "🌙";
+  }
+  try { localStorage.setItem("cb.theme", theme); } catch (e) {}
+}
+
+function setSettingsOpen(open) {
+  const btn = $("settings-toggle");
+  const body = $("settings-body");
+  if (!btn || !body) return;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  body.hidden = !open;
+  try { localStorage.setItem("cb.settings.open", open ? "1" : "0"); } catch (e) {}
+}
 
 wire();
+// Sync the theme button to whatever the pre-paint inline script applied, and
+// restore the saved Settings open/closed choice (default: open).
+setTheme(currentTheme());
+let _settingsOpen = "1";
+try { _settingsOpen = localStorage.getItem("cb.settings.open") || "1"; } catch (e) {}
+setSettingsOpen(_settingsOpen !== "0");
 loadSettings();
 loadModels();
 loadTesseractStatus();

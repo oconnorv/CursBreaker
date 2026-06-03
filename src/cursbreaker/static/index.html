@@ -4,8 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=8" />
+  <link rel="stylesheet" href="/static/styles.css?v=9" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
+  <script>
+    /* Apply the saved theme before first paint so light-theme users see no flash. */
+    try { if (localStorage.getItem("cb.theme") === "light") document.documentElement.dataset.theme = "light"; } catch (e) {}
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
@@ -18,18 +22,24 @@
         <p class="tagline">Handwriting &rarr; searchable hOCR, powered by your Gemini key</p>
       </div>
     </div>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light theme">
+      <span class="theme-icon" aria-hidden="true">&#9728;&#65039;</span><span class="theme-label">Light</span>
+    </button>
   </header>
 
   <main id="main" tabindex="-1">
     <section class="card" id="settings-card" aria-labelledby="settings-heading">
-      <details id="settings-details" open>
-        <summary class="card-head settings-summary">
-          <span class="chev" aria-hidden="true"></span>
-          <h2 id="settings-heading">Settings</h2>
-          <span id="key-status" class="badge">checking&hellip;</span>
-        </summary>
+      <div class="card-head settings-head">
+        <h2 id="settings-heading" class="settings-title">
+          <button id="settings-toggle" class="disclosure" type="button"
+                  aria-expanded="true" aria-controls="settings-body">
+            <span class="chev" aria-hidden="true"></span>Settings
+          </button>
+        </h2>
+        <span id="key-status" class="badge">checking&hellip;</span>
+      </div>
 
-        <div class="settings-body">
+      <div id="settings-body" class="settings-body">
           <div class="field">
             <label for="api_key">Gemini API key</label>
             <div class="row">
@@ -100,7 +110,6 @@
             <label class="check"><input type="checkbox" id="preprocess" /> <span>Preprocess images (orientation, gentle denoise/brightness)</span></label>
           </details>
         </div>
-      </details>
     </section>
 
     <section class="card" aria-labelledby="documents-heading">
@@ -155,6 +164,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>
