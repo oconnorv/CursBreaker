@@ -28,10 +28,18 @@ from pydantic import BaseModel
 
 from . import __version__
 from .config import load_settings, save_settings
-from .gemini_client import SUGGESTED_MODELS, make_provider
+from .gemini_client import make_provider
 from .hocr import XHTML_NS
 from .images import SUPPORTED_EXT, count_content_pages, is_supported
 from .pipeline import estimate_usage, process_batch
+from .pricing import (
+    CATALOG,
+    PRICES_AS_OF,
+    PRICING_URL,
+    cost_for,
+    effective_rates,
+    pricing_for,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -72,6 +80,7 @@ async def update_settings(payload: dict):
         elif key in fields:
             setattr(settings, key, value)
     settings.normalize_content()  # migrate a posted legacy "mixed" value
+    settings.sync_models()  # detection (two-pass) always follows the chosen model
     save_settings(settings)
     return settings.public_dict()
 
@@ -118,14 +127,25 @@ def key_status():
 
 @app.get("/api/models")
 def list_models():
-    settings = load_settings()
-    if not settings.use_mock and not settings.resolved_api_key():
-        return {"models": SUGGESTED_MODELS, "suggested": SUGGESTED_MODELS, "note": "no_key"}
-    try:
-        models = make_provider(settings).list_models()
-        return {"models": models, "suggested": SUGGESTED_MODELS}
-    except Exception as exc:
-        return {"models": SUGGESTED_MODELS, "suggested": SUGGESTED_MODELS, "error": str(exc)}
+    """The curated model catalog with published prices, for the dropdown +
+    automatic cost estimate. A fixed list (not the key's live ListModels) so the
+    selectable models and their prices stay in lockstep."""
+    return {
+        "models": [
+            {
+                "id": m.model,
+                "label": m.label,
+                "input_per_mtok": m.input_per_mtok,
+                "output_per_mtok": m.output_per_mtok,
+                "tier_threshold": m.tier_threshold,
+                "input_per_mtok_high": m.input_per_mtok_high,
+                "output_per_mtok_high": m.output_per_mtok_high,
+            }
+            for m in CATALOG
+        ],
+        "prices_as_of": PRICES_AS_OF,
+        "pricing_url": PRICING_URL,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -170,9 +190,10 @@ class EstimateRequest(BaseModel):
 
 @app.post("/api/estimate")
 def estimate(req: EstimateRequest):
-    """Free pre-flight estimate of the tokens (and, if prices are set, the rough
-    dollars) a run will cost -- before any transcription happens. Uses Gemini's
-    no-charge ``count_tokens`` for input; output is a labelled assumption."""
+    """Free pre-flight estimate of the tokens, and the rough dollars, a run will
+    cost -- before any transcription happens. Uses Gemini's no-charge
+    ``count_tokens`` for input; output is a labelled assumption, and the cost is
+    derived automatically from the selected model's published price."""
     paths = [STAGED[i] for i in req.file_ids if i in STAGED]
     if not paths:
         raise HTTPException(400, "No staged files to estimate.")
@@ -196,8 +217,6 @@ def estimate(req: EstimateRequest):
             "total": 0,
             "calls": 0,
             "cost": None,
-            "price_input_per_mtok": settings.price_input_per_mtok,
-            "price_output_per_mtok": settings.price_output_per_mtok,
         }
 
     if not settings.resolved_api_key():
@@ -231,12 +250,9 @@ def process(req: ProcessRequest):
     job_id = uuid.uuid4().hex
     out_dir = JOBS_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Prices are captured at job start so the live cost figure stays stable even
-    # if the user edits them mid-run; tokens are always counted regardless.
-    prices = {
-        "input": settings.price_input_per_mtok,
-        "output": settings.price_output_per_mtok,
-    }
+    # The model is captured at job start so the live cost figure stays anchored
+    # to the model actually used, even if the user switches models mid-run.
+    model = settings.transcription_model
     JOBS[job_id] = {
         "status": "running",
         "done": 0,
@@ -245,8 +261,8 @@ def process(req: ProcessRequest):
         "results": [],
         "out_dir": str(out_dir),
         "error": None,
-        "prices": prices,
-        "tokens": _usage_to_dict(None, prices),  # zeros until the provider exists
+        "model": model,
+        "tokens": _usage_to_dict(None, model),  # zeros until the provider exists
     }
     threading.Thread(
         target=_run_job, args=(job_id, paths, settings, out_dir), daemon=True
@@ -279,22 +295,22 @@ def _run_job(job_id, paths, settings, out_dir):
                     for n in r.image_names
                 ],
                 "error": r.error,
-                "tokens": _usage_to_dict(r.token_usage, job["prices"]),
+                "tokens": _usage_to_dict(r.token_usage, job["model"]),
             }
             for r in results
         ]
-        job["tokens"] = _usage_to_dict(provider.usage, job["prices"])
+        job["tokens"] = _usage_to_dict(provider.usage, job["model"])
         job["status"] = "done"
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)
 
 
-def _usage_to_dict(usage, prices=None) -> dict:
-    """Serialize a ``TokenUsage`` (or None -> zeros) for the browser, adding the
-    dollar cost only when prices are set so a stale price is never implied."""
-    pin = (prices or {}).get("input") or 0.0
-    pout = (prices or {}).get("output") or 0.0
+def _usage_to_dict(usage, model=None) -> dict:
+    """Serialize a ``TokenUsage`` (or None -> zeros) for the browser. The dollar
+    cost is derived automatically from the selected model's published price; it
+    is ``None`` when the model isn't in the catalog (so no dollars are implied),
+    and the (tier-aware) rates used are echoed back for transparency."""
     if usage is None:
         d = {"input": 0, "output": 0, "thinking": 0, "total": 0, "calls": 0}
     else:
@@ -305,9 +321,23 @@ def _usage_to_dict(usage, prices=None) -> dict:
             "total": usage.total,
             "calls": usage.calls,
         }
-    d["price_input_per_mtok"] = pin
-    d["price_output_per_mtok"] = pout
-    d["cost"] = (usage.cost(pin, pout) if usage is not None else 0.0) if (pin or pout) else None
+    pricing = pricing_for(model)
+    if pricing:
+        if usage is not None:
+            in_rate, out_rate = effective_rates(pricing, usage)
+            d["cost"] = cost_for(pricing, usage)
+        else:
+            in_rate, out_rate = pricing.input_per_mtok, pricing.output_per_mtok
+            d["cost"] = 0.0
+        d["model"] = pricing.model
+        d["model_label"] = pricing.label
+        d["price_input_per_mtok"] = in_rate
+        d["price_output_per_mtok"] = out_rate
+        d["prices_as_of"] = PRICES_AS_OF
+    else:
+        d["price_input_per_mtok"] = 0.0
+        d["price_output_per_mtok"] = 0.0
+        d["cost"] = None
     return d
 
 
@@ -319,7 +349,7 @@ def _public_job(job: dict) -> dict:
     provider = job.get("_provider")
     usage = getattr(provider, "usage", None) if provider is not None else None
     if usage is not None:
-        out["tokens"] = _usage_to_dict(usage, job.get("prices"))
+        out["tokens"] = _usage_to_dict(usage, job.get("model"))
     return out
 
 

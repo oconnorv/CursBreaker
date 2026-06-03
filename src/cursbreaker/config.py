@@ -22,8 +22,10 @@ APP_NAME = "CursBreaker"
 class Settings(BaseModel):
     # --- Gemini API ---
     api_key: str = ""
-    # Model names change often; these are sensible defaults but the UI lets the
-    # user pick any model their key exposes (see /api/models).
+    # The UI offers a curated dropdown of these models (see pricing.CATALOG and
+    # /api/models) so cost can be priced automatically. One picker drives both:
+    # ``detection_model`` (used by the two-pass flow) is kept in sync with
+    # ``transcription_model``.
     transcription_model: str = "gemini-3.1-pro-preview"
     detection_model: str = "gemini-3.1-pro-preview"
     temperature: float = 0.3
@@ -67,15 +69,6 @@ class Settings(BaseModel):
     word_confidence: int = 95  # x_wconf for words on detected lines
     interpolated_confidence: int = 60  # x_wconf for words on interpolated lines
     language: str = "en"  # used for xml:lang and per-line "lang" in hOCR
-
-    # --- Cost estimate (tokens are always tracked; dollars are optional) ---
-    # Per-million-token prices, used only to turn token counts into a rough
-    # dollar figure shown locally. They default to 0 so no (possibly stale)
-    # price is ever implied: a dollar estimate appears only once the user enters
-    # the live prices from Google's pricing page, which change over time and by
-    # model. The token counts themselves are always exact and need no price.
-    price_input_per_mtok: float = 0.0
-    price_output_per_mtok: float = 0.0
 
     def public_dict(self) -> dict:
         """Settings safe to send to the browser (API key presence only)."""
@@ -123,6 +116,15 @@ class Settings(BaseModel):
             self.refine_word_boxes = True
         return self
 
+    def sync_models(self) -> "Settings":
+        """Single-model UX: one dropdown drives everything, so the two-pass
+        detection step always uses the transcription model. Enforced here (not
+        just in the browser) so a stale config or a direct API call can't leave
+        detection running on a different model than the one priced/reported.
+        Idempotent; returns ``self`` for chaining."""
+        self.detection_model = self.transcription_model
+        return self
+
 
 def config_path() -> Path:
     override = os.environ.get("CURSBREAKER_CONFIG")
@@ -135,7 +137,11 @@ def load_settings() -> Settings:
     path = config_path()
     if path.exists():
         try:
-            return Settings.model_validate_json(path.read_text("utf-8")).normalize_content()
+            return (
+                Settings.model_validate_json(path.read_text("utf-8"))
+                .normalize_content()
+                .sync_models()
+            )
         except Exception:
             # A corrupt config should never brick the app; fall back to defaults.
             return Settings()

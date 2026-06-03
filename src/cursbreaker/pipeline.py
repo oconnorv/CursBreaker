@@ -18,6 +18,7 @@ from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
 from .images import count_content_pages, load_pages
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
+from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
 from .searchable_pdf import build_searchable_pdf
 from . import tesseract_client
 
@@ -318,9 +319,15 @@ def estimate_usage(
     output_tokens = calls * _EST_OUTPUT_TOKENS_PER_CALL
     usage = TokenUsage(input=input_tokens, output=output_tokens, calls=calls)
 
-    pin = settings.price_input_per_mtok
-    pout = settings.price_output_per_mtok
-    cost = usage.cost(pin, pout) if (pin or pout) else None
+    # Price automatically from the selected model's published rate (no manual
+    # entry). No catalog entry, or no calls -> tokens only, no dollar figure.
+    pricing = pricing_for(settings.transcription_model)
+    if pricing and calls:
+        in_rate, out_rate = effective_rates(pricing, usage)
+        cost = cost_for(pricing, usage)
+    else:
+        in_rate = out_rate = 0.0
+        cost = None
     return {
         "files": len(paths),
         "pages": total_pages,
@@ -331,6 +338,9 @@ def estimate_usage(
         "total": usage.total,
         "assumed_output_tokens_per_call": _EST_OUTPUT_TOKENS_PER_CALL,
         "cost": cost,
-        "price_input_per_mtok": pin,
-        "price_output_per_mtok": pout,
+        "model": settings.transcription_model,
+        "model_label": pricing.label if pricing else settings.transcription_model,
+        "price_input_per_mtok": in_rate,
+        "price_output_per_mtok": out_rate,
+        "prices_as_of": PRICES_AS_OF,
     }

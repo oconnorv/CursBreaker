@@ -20,8 +20,8 @@ async function api(method, url, body) {
 }
 
 // ---- settings ----------------------------------------------------------- //
-const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence", "price_input_per_mtok", "price_output_per_mtok"];
-const TEXT = ["transcription_model", "detection_model", "thinking_level", "media_resolution", "tesseract_language"];
+const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
+const TEXT = ["thinking_level", "media_resolution", "tesseract_language"];
 const BOOL = ["use_mock", "preprocess", "refine_word_boxes"];
 
 function gatherSettings() {
@@ -32,6 +32,9 @@ function gatherSettings() {
     if (!Number.isNaN(v)) s[id] = v;
   }
   for (const id of BOOL) s[id] = $(id).checked;
+  // One picker drives both models: detection (two-pass) follows transcription.
+  const model = $("model").value;
+  if (model) { s.transcription_model = model; s.detection_model = model; }
   const mode = document.querySelector("input[name=mode]:checked");
   if (mode) s.mode = mode.value;
   const ct = document.querySelector("input[name=content_type]:checked");
@@ -88,6 +91,16 @@ async function loadSettings() {
   const s = await api("GET", "/api/settings");
   for (const id of [...TEXT, ...NUMERIC]) if (s[id] !== undefined) $(id).value = s[id];
   for (const id of BOOL) if (s[id] !== undefined) $(id).checked = s[id];
+  // Model dropdown (options populated by loadModelCatalog before this runs).
+  const sel = $("model");
+  if (s.transcription_model) sel.value = s.transcription_model;
+  if (!sel.value && sel.options.length) {
+    // A saved model that isn't in the curated catalog -> fall back to the first
+    // (and persist it so the UI and the backend agree on what will run).
+    sel.value = sel.options[0].value;
+    saveSettings(gatherSettings());
+  }
+  updateModelPricingHint();
   const radio = document.querySelector(`input[name=mode][value="${s.mode}"]`);
   if (radio) radio.checked = true;
   const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
@@ -150,17 +163,47 @@ async function saveSettings(partial) {
   applyKeyStatus(data);
 }
 
-async function loadModels() {
+// Curated model catalog (with published prices) backing the dropdown + the
+// automatic cost estimate. Populated once from the backend.
+let modelCatalog = [];
+let pricesAsOf = "";
+
+async function loadModelCatalog() {
   try {
     const data = await api("GET", "/api/models");
-    const list = $("model-list");
-    list.innerHTML = "";
-    for (const m of data.models || []) {
+    modelCatalog = data.models || [];
+    pricesAsOf = data.prices_as_of || "";
+    const sel = $("model");
+    sel.innerHTML = "";
+    for (const m of modelCatalog) {
       const opt = document.createElement("option");
-      opt.value = m;
-      list.appendChild(opt);
+      opt.value = m.id;
+      opt.textContent = m.label;
+      sel.appendChild(opt);
     }
-  } catch (e) { /* suggestions are optional */ }
+  } catch (e) { /* dropdown stays empty; settings still load */ }
+}
+
+function modelInfo(id) {
+  return modelCatalog.find((m) => m.id === id) || null;
+}
+
+// Show the selected model's published price right under the picker, so the cost
+// basis is visible before anyone runs anything -- and clearly an estimate.
+function updateModelPricingHint() {
+  const hint = $("model-pricing");
+  if (!hint) return;
+  const m = modelInfo($("model").value);
+  if (!m) { hint.textContent = ""; return; }
+  let rates = `$${m.input_per_mtok.toFixed(2)}/1M input, $${m.output_per_mtok.toFixed(2)}/1M output`;
+  if (m.tier_threshold) {
+    rates += ` for prompts &le;${formatTokens(m.tier_threshold)} tokens `
+      + `($${m.input_per_mtok_high.toFixed(2)}/$${m.output_per_mtok_high.toFixed(2)} above)`;
+  }
+  hint.innerHTML =
+    `<b>${escapeHtml(m.label)}</b>: ${rates}.`
+    + (pricesAsOf ? ` Prices as of ${escapeHtml(pricesAsOf)}, used for the cost estimate (an estimate, not a guarantee).` : "")
+    + ` <a href="${PRICING_URL}" target="_blank" rel="noopener noreferrer">Live pricing</a>.`;
 }
 
 // ---- upload / staging --------------------------------------------------- //
@@ -374,6 +417,14 @@ function priceBasis(t) {
     + `$${Number(t.price_output_per_mtok || 0).toFixed(2)}/1M output`;
 }
 
+// "Gemini 3.5 Flash's published price of $… (prices as of …)" — the model and
+// date a dollar figure was computed from, for full transparency.
+function priceSource(t) {
+  const model = t.model_label ? `${escapeHtml(t.model_label)}'s ` : "";
+  const asOf = t.prices_as_of ? ` (prices as of ${escapeHtml(t.prices_as_of)})` : "";
+  return `${model}published price of ${priceBasis(t)}${asOf}`;
+}
+
 // Compact token line (no dollars): "12,345 tokens · 10,000 in / 2,345 out · 8 API calls".
 function tokenSummary(t) {
   if (!t) return "";
@@ -395,10 +446,10 @@ function costSuffix(t) {
 // The fuller, transparent dollar disclaimer shown with a final/total figure.
 function costDisclaimerHtml(t) {
   if (!t || t.cost === null || t.cost === undefined) {
-    return ` <span class="muted">Set per-million prices in Advanced to estimate the dollar cost.</span>`;
+    return ` <span class="muted">No published price on file for this model, so there's no dollar estimate &mdash; the token counts above are exact.</span>`;
   }
   return ` <span class="muted">&mdash; <b>~${formatCost(t.cost)}</b> is a rough estimate, not a guarantee, `
-    + `computed at ${priceBasis(t)} (the prices you set in Advanced). Token counts are exact; Google `
+    + `based on ${priceSource(t)}. Token counts are exact; Google `
     + `bills the actual usage &mdash; verify live rates at `
     + `<a href="${PRICING_URL}" target="_blank" rel="noopener noreferrer">Gemini API pricing</a>.</span>`;
 }
@@ -429,8 +480,9 @@ function renderEstimate(d) {
     return `<span class="glyph" aria-hidden="true">●</span><span>No Gemini tokens for these `
       + `${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span>`;
   }
+  const withModel = d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "";
   const head =
-    `Estimate for ${d.files} file(s), ${formatTokens(d.pages)} page(s): about `
+    `Estimate for ${d.files} file(s), ${formatTokens(d.pages)} page(s)${withModel}: about `
     + `<b>${formatTokens(d.input)}</b> input tokens plus ~${formatTokens(d.output)} output tokens `
     + `(assuming ~${formatTokens(d.assumed_output_tokens_per_call)} output tokens across `
     + `${formatTokens(d.calls)} API call(s)).`;
@@ -465,6 +517,8 @@ function wire() {
   for (const id of BOOL) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const r of document.querySelectorAll("input[name=mode]")) r.addEventListener("change", () => saveSettings(gatherSettings()));
   for (const r of document.querySelectorAll("input[name=content_type]")) r.addEventListener("change", () => saveSettings(gatherSettings()));
+  // Model picker: update the visible price basis, then persist (both models).
+  $("model").addEventListener("change", () => { updateModelPricingHint(); saveSettings(gatherSettings()); });
 
   const dz = $("dropzone");
   $("browse").onclick = () => $("file-input").click();
@@ -534,13 +588,18 @@ function setSettingsOpen(open) {
   try { localStorage.setItem("cb.settings.open", open ? "1" : "0"); } catch (e) {}
 }
 
-wire();
-// Sync the theme button to whatever the pre-paint inline script applied, and
-// restore the saved Settings open/closed choice (default: open).
-setTheme(currentTheme());
-let _settingsOpen = "1";
-try { _settingsOpen = localStorage.getItem("cb.settings.open") || "1"; } catch (e) {}
-setSettingsOpen(_settingsOpen !== "0");
-loadSettings();
-loadModels();
-loadTesseractStatus();
+async function init() {
+  wire();
+  // Sync the theme button to whatever the pre-paint inline script applied, and
+  // restore the saved Settings open/closed choice (default: open).
+  setTheme(currentTheme());
+  let settingsOpen = "1";
+  try { settingsOpen = localStorage.getItem("cb.settings.open") || "1"; } catch (e) {}
+  setSettingsOpen(settingsOpen !== "0");
+  // Populate the model dropdown before loading settings, so the saved model can
+  // be selected and its price shown.
+  await loadModelCatalog();
+  await loadSettings();
+  loadTesseractStatus();
+}
+init();
