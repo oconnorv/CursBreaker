@@ -12,8 +12,8 @@ const APP_JS = path.resolve(
   "../../src/cursbreaker/static/app.js"
 );
 
-let reduceMotion = false;
-const SCROLL_H = 999;
+const CLIENT_H = 200;   // visible height of the log box
+const LINE_H = 20;      // simulated px per log line
 
 function makeEl() {
   const el = {
@@ -21,7 +21,7 @@ function makeEl() {
     dataset: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     value: "", checked: false, hidden: false, textContent: "", className: "",
     disabled: false, href: "", onclick: null, options: [],
-    scrollTop: 0, scrollHeight: SCROLL_H,
+    scrollTop: 0, clientHeight: CLIENT_H,
     setAttribute(k, v) { this._attrs[k] = String(v); },
     getAttribute(k) { return this._attrs[k]; },
     removeAttribute(k) { delete this._attrs[k]; },
@@ -31,6 +31,11 @@ function makeEl() {
     querySelector() { return makeEl(); }, querySelectorAll() { return []; },
   };
   Object.defineProperty(el, "childElementCount", { get() { return this._children.length; } });
+  // scrollHeight grows with content (clamped to the visible height), like a real
+  // scroll container, so the "at bottom?" math behaves realistically.
+  Object.defineProperty(el, "scrollHeight", {
+    get() { return Math.max(this.clientHeight, this._children.length * LINE_H); },
+  });
   Object.defineProperty(el, "innerHTML", {
     get() { return this._html; },
     set(v) { this._html = v; if (v === "") { this._children = []; this.options = []; } },
@@ -41,6 +46,7 @@ function makeEl() {
 let elements = {};
 const el = (id) => (elements[id] || (elements[id] = makeEl()));
 function freshDom() { elements = {}; }
+const lines = (n) => Array.from({ length: n }, (_, i) => `line ${i + 1}`);
 
 const document = {
   getElementById: el,
@@ -55,7 +61,7 @@ const sandbox = {
   document,
   localStorage: { getItem: () => null, setItem() {} },
   fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
-  matchMedia: (_q) => ({ matches: reduceMotion }),
+  matchMedia: () => ({ matches: false }),
   console, navigator: { sendBeacon() {} },
   setInterval: () => 0, clearInterval: () => {}, setTimeout: () => 0,
   confirm: () => true, FormData: class { append() {} }, addEventListener() {},
@@ -100,16 +106,24 @@ check("done forces bar to 100%", el("progress-bar").style.width === "100%", el("
 check("done aria-valuenow 100", el("progress").getAttribute("aria-valuenow") === "100");
 check("done headline shows file count", el("progress-text").textContent === "Done — 2 file(s)", el("progress-text").textContent);
 
-// --- Group C: reduced-motion suppresses autoscroll ---------------------- //
+// --- Group C: stick to bottom ONLY when already at the bottom ----------- //
 freshDom();
-reduceMotion = true;
-el("activity-log").scrollTop = -1;  // sentinel
-renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["a"] });
-check("reduced-motion leaves scrollTop untouched", el("activity-log").scrollTop === -1, el("activity-log").scrollTop);
+const log = el("activity-log");
 
-reduceMotion = false;
-renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["a", "b"] });
-check("normal motion autoscrolls to bottom", el("activity-log").scrollTop === SCROLL_H, el("activity-log").scrollTop);
+// C1: first render with enough lines to overflow -> follows to the bottom.
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: lines(30) });
+check("first render follows to bottom", log.scrollTop === log.scrollHeight, `${log.scrollTop} vs ${log.scrollHeight}`);
+
+// C2: user scrolls up -> a new line must NOT yank them back down.
+log.scrollTop = 100;  // scrolled up, away from the bottom
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: lines(31) });
+check("scrolled-up position is preserved", log.scrollTop === 100, log.scrollTop);
+check("new line still appended while scrolled up", log.childElementCount === 31, log.childElementCount);
+
+// C3: user scrolls back to the bottom -> following resumes.
+log.scrollTop = log.scrollHeight - log.clientHeight;  // parked at the bottom
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: lines(32) });
+check("at-bottom follows the new line", log.scrollTop === log.scrollHeight, `${log.scrollTop} vs ${log.scrollHeight}`);
 
 // --- Group D: error headline -------------------------------------------- //
 freshDom();

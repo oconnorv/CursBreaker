@@ -301,6 +301,12 @@ function renderProgress(job) {
   const logEl = $("activity-log");
   if (logEl) {
     const lines = job.log || [];
+    // Decide BEFORE adding lines whether to follow the tail: only if the user is
+    // already parked at (or within a few px of) the bottom. If they've scrolled
+    // up to read, leave their position alone — they can scroll back down to
+    // resume following.
+    const stickToBottom =
+      logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= 4;
     if (logEl.childElementCount > lines.length) logEl.replaceChildren();
     for (let i = logEl.childElementCount; i < lines.length; i++) {
       const li = document.createElement("li");
@@ -313,10 +319,7 @@ function renderProgress(job) {
       const latest = lines[lines.length - 1];
       if (live && live.textContent !== latest) live.textContent = latest;
     }
-    // Auto-scroll to the newest line unless the user prefers reduced motion.
-    const reduce = typeof matchMedia === "function"
-      && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!reduce) logEl.scrollTop = logEl.scrollHeight;
+    if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
   }
 }
 
