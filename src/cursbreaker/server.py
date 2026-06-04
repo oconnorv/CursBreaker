@@ -248,9 +248,13 @@ def process(req: ProcessRequest):
     model = settings.transcription_model
     JOBS[job_id] = {
         "status": "running",
-        "done": 0,
+        "done": 0,                 # legacy file counters (kept for back-compat)
         "total": len(paths),
-        "current": "",
+        "current": "",             # latest step message
+        "stage": "",               # latest step's machine tag
+        "log": [],                 # append-only activity log (capped)
+        "done_units": 0,           # pages completed across the whole job (bar)
+        "total_units": 0,          # total pages across the whole job (bar)
         "results": [],
         "out_dir": str(out_dir),
         "error": None,
@@ -263,6 +267,16 @@ def process(req: ProcessRequest):
     return {"job_id": job_id}
 
 
+_LOG_CAP = 500  # keep the most recent N activity-log lines (bounds memory + JSON)
+
+
+def _append_capped(log: list, message: str, cap: int = _LOG_CAP) -> None:
+    """Append a line, trimming to the most recent ``cap`` entries."""
+    log.append(message)
+    if len(log) > cap:
+        del log[: len(log) - cap]
+
+
 def _run_job(job_id, paths, settings, out_dir):
     job = JOBS[job_id]
     try:
@@ -271,10 +285,27 @@ def _run_job(job_id, paths, settings, out_dir):
         # live (per page, as each call returns), not just at file boundaries.
         job["_provider"] = provider
 
-        def cb(done, total, name):
-            job["done"], job["total"], job["current"] = done, total, name
+        # Page count up front (cheap; same function /api/upload uses) so the bar
+        # is page-driven and actually fills. count_content_pages already returns
+        # 1 on any read error, so the sum is always >= the file count.
+        total_units = sum(count_content_pages(p) for p in paths)
+        job["total_units"] = total_units
 
-        results = process_batch(paths, provider, settings, out_dir, cb)
+        # The worker thread writes these scalar keys and appends to job["log"];
+        # the request thread reads them in _public_job. Simple int/str writes and
+        # list.append are atomic under the GIL, and no keys are added after the
+        # job dict is created, so no lock is needed.
+        def report(ev):
+            job["current"] = ev.message
+            job["stage"] = ev.stage
+            job["done_units"] = ev.units_done
+            job["total_units"] = ev.units_total or job["total_units"]
+            job["done"], job["total"] = ev.file_index, ev.file_total
+            _append_capped(job["log"], ev.message)
+
+        results = process_batch(
+            paths, provider, settings, out_dir, report, units_total=total_units
+        )
         job["results"] = [
             {
                 "source_name": r.source_name,
@@ -339,6 +370,11 @@ def _public_job(job: dict) -> dict:
     provider handle) dropped, and the token counter refreshed live from the
     provider so it ticks up while the job runs."""
     out = {k: v for k, v in job.items() if not k.startswith("_")}
+    # The log list is shared by reference with the worker thread, which may keep
+    # appending after this returns and before Starlette serializes; copy it so a
+    # stable snapshot is sent.
+    if isinstance(out.get("log"), list):
+        out["log"] = list(out["log"])
     provider = job.get("_provider")
     usage = getattr(provider, "usage", None) if provider is not None else None
     if usage is not None:

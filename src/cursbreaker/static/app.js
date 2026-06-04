@@ -259,6 +259,11 @@ async function transcribe() {
   const est = $("estimate-info");
   if (est) { est.hidden = true; est.innerHTML = ""; }
   $("token-text").textContent = "";
+  // Reset the activity log + bar for a fresh run.
+  const logReset = $("activity-log"); if (logReset) logReset.replaceChildren();
+  const liveReset = $("activity-live"); if (liveReset) liveReset.textContent = "";
+  $("progress-bar").style.width = "0%";
+  $("progress").setAttribute("aria-valuenow", "0");
   $("results-card").hidden = true;
   $("results").innerHTML = "";
   try {
@@ -271,20 +276,60 @@ async function transcribe() {
   }
 }
 
+// Drive the page-driven bar + the verbose activity log from a job payload.
+// Top-level so the Node test harness can exercise it directly with a fake DOM.
+function renderProgress(job) {
+  // Bar fills by pages completed across the whole job; clamp, and force 100%
+  // once finished so it always reads full on completion.
+  const total = Number(job.total_units || 0);
+  const done = Number(job.done_units || 0);
+  let pct = total ? Math.round((done / total) * 100) : 0;
+  pct = Math.max(0, Math.min(100, pct));
+  if (job.status === "done") pct = 100;
+  $("progress-bar").style.width = pct + "%";
+  $("progress").setAttribute("aria-valuenow", String(pct));
+
+  // Concise headline above the log.
+  $("progress-text").textContent =
+    job.status === "error" ? "Error: " + job.error
+    : job.status === "done" ? `Done — ${(job.results || []).length} file(s)`
+    : total ? `Processing — page ${done}/${total}`
+    : "Processing…";
+
+  // Append-only activity log: the server sends the full (capped) list each
+  // poll; render idempotently by index, rebuilding only if it was trimmed.
+  const logEl = $("activity-log");
+  if (logEl) {
+    const lines = job.log || [];
+    // Decide BEFORE adding lines whether to follow the tail: only if the user is
+    // already parked at (or within a few px of) the bottom. If they've scrolled
+    // up to read, leave their position alone — they can scroll back down to
+    // resume following.
+    const stickToBottom =
+      logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= 4;
+    if (logEl.childElementCount > lines.length) logEl.replaceChildren();
+    for (let i = logEl.childElementCount; i < lines.length; i++) {
+      const li = document.createElement("li");
+      li.textContent = lines[i];   // textContent -> no escaping needed
+      logEl.appendChild(li);
+    }
+    // Announce only the newest line to screen-reader users.
+    if (lines.length) {
+      const live = $("activity-live");
+      const latest = lines[lines.length - 1];
+      if (live && live.textContent !== latest) live.textContent = latest;
+    }
+    if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
 function pollJob(jobId) {
   clearInterval(pollTimer);
   const tick = async () => {
     let job;
     try { job = await api("GET", `/api/jobs/${jobId}`); }
     catch (e) { return; }
-    const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
-    $("progress-bar").style.width = pct + "%";
-    $("progress").setAttribute("aria-valuenow", String(pct));
-    $("progress-text").textContent =
-      job.status === "running"
-        ? `Processing ${job.done}/${job.total}${job.current ? " — " + job.current : ""}`
-        : job.status === "error" ? "Error: " + job.error
-        : `Done — ${job.total} file(s)`;
+    renderProgress(job);
     // Live token counter: ticks up as each page's call returns.
     const tok = $("token-text");
     if (tok) {

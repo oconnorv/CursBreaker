@@ -22,7 +22,35 @@ from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
 from .searchable_pdf import build_searchable_pdf
 from . import tesseract_client
 
-ProgressCb = Callable[[int, int, str], None]
+@dataclass(frozen=True)
+class ProgressEvent:
+    """One step of work, reported live as a batch runs.
+
+    ``units_done``/``units_total`` are *pages* across the whole batch (the
+    progress bar is page-driven). ``stage`` is a machine tag
+    ("load" | "page" | "page_done" | "write" | "file_done" | "error" |
+    "batch_done") and ``message`` is the human line shown in the activity log."""
+
+    message: str
+    stage: str
+    file_index: int
+    file_total: int
+    file_name: str
+    units_done: int
+    units_total: int
+
+
+# Top-level reporter the server supplies; receives one ProgressEvent per step.
+Reporter = Callable[["ProgressEvent"], None]
+# The per-file line emitter threaded into process_file/process_page: a callable
+# ``report(message, *, stage="page")`` built by process_batch (which injects the
+# file context and the running page counter). Defaults to a no-op everywhere so
+# direct callers (e.g. tests) need not pass one.
+StepReporter = Callable[..., None]
+
+
+def _noop(*_args, **_kwargs) -> None:
+    pass
 
 # Pre-flight estimate only: a transparent, clearly-labelled assumption for how
 # many tokens one Gemini call returns (transcription text plus a little
@@ -46,27 +74,49 @@ class FileResult:
     token_usage: TokenUsage = field(default_factory=TokenUsage)
 
 
-def process_page(loaded, provider: TranscriptionProvider, settings: Settings) -> PageResult:
+def process_page(
+    loaded,
+    provider: TranscriptionProvider,
+    settings: Settings,
+    *,
+    report: StepReporter | None = None,
+    page_no: int = 0,
+    page_total: int = 0,
+) -> PageResult:
+    report = report or _noop
     content = (settings.content_type or "handwriting").lower()
     if content == "text":
-        return _process_page_text_only(loaded, settings)
+        return _process_page_text_only(
+            loaded, settings, report=report, page_no=page_no, page_total=page_total
+        )
     if content == "mixed":
         # Retired alias: "Gemini text + Tesseract" is now handwriting with word-
         # box refinement. Defensive, in case an un-migrated value reaches here.
         settings = settings.model_copy(
             update={"content_type": "handwriting", "refine_word_boxes": True}
         )
-    return _process_page_handwriting(loaded, provider, settings)
+    return _process_page_handwriting(
+        loaded, provider, settings, report=report, page_no=page_no, page_total=page_total
+    )
 
 
 def _process_page_handwriting(
-    loaded, provider: TranscriptionProvider, settings: Settings
+    loaded,
+    provider: TranscriptionProvider,
+    settings: Settings,
+    *,
+    report: StepReporter | None = None,
+    page_no: int = 0,
+    page_total: int = 0,
 ) -> PageResult:
     """Gemini transcription (one-pass, or two-pass with line alignment). The
     Gemini text is always authoritative; when ``refine_word_boxes`` is set and
     Tesseract is available, real per-word boxes are layered on afterwards."""
+    report = report or _noop
+    pg = f"Page {page_no}/{page_total}"
     png = loaded.to_png_bytes()
     if settings.mode == "one_pass":
+        report(f"{pg} · transcribing + locating (Gemini)…", stage="page")
         items = provider.transcribe_with_boxes(png)
         plain_text = "\n".join(i.text for i in items)
         placed: list[PlacedLine] = [
@@ -74,7 +124,9 @@ def _process_page_handwriting(
             for i in items
         ]
     else:
+        report(f"{pg} · transcribing (Gemini)…", stage="page")
         text = provider.transcribe_text(png)
+        report(f"{pg} · locating lines (Gemini)…", stage="page")
         detected = provider.detect_lines(png)
         placed = align_lines(text.splitlines(), detected)
         plain_text = text
@@ -97,6 +149,7 @@ def _process_page_handwriting(
     # Gemini transcription above is already final; this only attaches real
     # per-word boxes where Tesseract agrees, and can never change the text.
     if settings.refine_word_boxes and tesseract_client.is_available(settings):
+        report(f"{pg} · refining word positions (Tesseract)…", stage="page")
         _refine_word_boxes(loaded.image, lines, settings)
     return PageResult(
         image_name=f"{loaded.output_stem}.png",
@@ -107,8 +160,17 @@ def _process_page_handwriting(
     )
 
 
-def _process_page_text_only(loaded, settings: Settings) -> PageResult:
+def _process_page_text_only(
+    loaded,
+    settings: Settings,
+    *,
+    report: StepReporter | None = None,
+    page_no: int = 0,
+    page_total: int = 0,
+) -> PageResult:
     """Tesseract-only flow: no Gemini call, real per-word boxes throughout."""
+    report = report or _noop
+    report(f"Page {page_no}/{page_total} · reading text (Tesseract)…", stage="page")
     tesseract_client.require_available(settings)
     w, h = loaded.sent_width, loaded.sent_height
     lines = tesseract_client.transcribe_page(
@@ -174,7 +236,10 @@ def process_file(
     provider: TranscriptionProvider,
     settings: Settings,
     out_dir: Path,
+    *,
+    report: StepReporter | None = None,
 ) -> FileResult:
+    report = report or _noop
     path = Path(path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -182,21 +247,34 @@ def process_file(
     # *this* file added (the provider is shared across a batch).
     usage_before = _provider_usage(provider)
 
+    report("Loading…", stage="load")
     loaded_pages = load_pages(
         path,
         preprocess=settings.preprocess,
         max_dimension=settings.max_dimension,
         pdf_dpi=settings.pdf_dpi,
     )
+    total_pages = len(loaded_pages)
+    report(f"Loaded {total_pages} page(s)", stage="load")
 
     page_results: list[PageResult] = []
     image_names: list[str] = []
-    for loaded in loaded_pages:
-        page_results.append(process_page(loaded, provider, settings))
+    for i, loaded in enumerate(loaded_pages, start=1):
+        page_results.append(
+            process_page(
+                loaded, provider, settings,
+                report=report, page_no=i, page_total=total_pages,
+            )
+        )
         png_name = f"{loaded.output_stem}.png"
         loaded.image.save(out_dir / png_name)
         image_names.append(png_name)
+        # A page counts as "done" (advancing the bar) once it's transcribed and
+        # its PNG is saved; process_batch increments the global page counter on
+        # this stage.
+        report(f"Page {i}/{total_pages} done", stage="page_done")
 
+    report("Writing outputs (text, hOCR, searchable PDF)…", stage="write")
     stem = path.stem
     txt_name = f"{stem}.txt"
     hocr_name = f"{stem}.hocr"
@@ -224,10 +302,12 @@ def process_file(
     )
     (out_dir / pdf_name).write_bytes(pdf_bytes)
 
+    n_lines = sum(len(p.lines) for p in page_results)
+    report(f"Done — {total_pages} page(s), {n_lines} line(s)", stage="file_done")
     return FileResult(
         source_name=path.name,
         n_pages=len(page_results),
-        n_lines=sum(len(p.lines) for p in page_results),
+        n_lines=n_lines,
         txt_name=txt_name,
         hocr_name=hocr_name,
         pdf_name=pdf_name,
@@ -250,20 +330,51 @@ def process_batch(
     provider: TranscriptionProvider,
     settings: Settings,
     out_dir: Path,
-    progress_cb: ProgressCb | None = None,
+    report: Reporter | None = None,
+    units_total: int = 0,
 ) -> list[FileResult]:
+    """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
+
+    ``units_total`` is the total page count across the batch (the bar is
+    page-driven); the running "pages done" counter advances on each ``page_done``
+    step. Messages are prefixed with the filename only when the batch has more
+    than one file."""
     results: list[FileResult] = []
     total = len(paths)
+    state = {"done": 0}  # pages completed across the whole batch
+
     for idx, path in enumerate(paths):
         name = Path(path).name
-        if progress_cb:
-            progress_cb(idx, total, name)
+        prefix = f"{name} · " if total > 1 else ""
+
+        # A per-file line emitter that injects file context + the running page
+        # counter. ``page_done`` advances the global counter before the event is
+        # built, so ``units_done`` reflects the just-finished page.
+        def report_line(message, *, stage="page", _idx=idx, _name=name, _prefix=prefix):
+            if stage == "page_done":
+                state["done"] += 1
+            if report:
+                report(ProgressEvent(
+                    message=_prefix + message, stage=stage,
+                    file_index=_idx, file_total=total, file_name=_name,
+                    units_done=state["done"], units_total=units_total,
+                ))
+
         try:
-            results.append(process_file(path, provider, settings, out_dir))
+            results.append(
+                process_file(path, provider, settings, out_dir, report=report_line)
+            )
         except Exception as exc:  # one bad file must not kill the batch
             results.append(FileResult(source_name=name, error=str(exc)))
-        if progress_cb:
-            progress_cb(idx + 1, total, name)
+            report_line(f"Failed: {exc}", stage="error")
+
+    if report and total > 1:
+        report(ProgressEvent(
+            message="All files complete.", stage="batch_done",
+            file_index=max(0, total - 1), file_total=total,
+            file_name=Path(paths[-1]).name if paths else "",
+            units_done=state["done"], units_total=units_total,
+        ))
     return results
 
 

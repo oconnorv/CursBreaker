@@ -318,3 +318,73 @@ def test_estimate_no_cost_for_uncatalogued_model(png_path):
     d = estimate_usage([png_path], _BillingProvider(), settings)
     assert d["cost"] is None            # unknown price -> tokens only, no dollars
     assert d["input"] == 500
+
+
+# --- progress reporting -------------------------------------------------- #
+
+def _collect_progress(paths, provider, settings, out, units_total=0):
+    events = []
+    process_batch(paths, provider, settings, out, events.append, units_total=units_total)
+    return events
+
+
+def test_progress_reports_step_sequence_two_pass(pdf_path, tmp_path):
+    out = tmp_path / "out"
+    settings = Settings(content_type="handwriting", mode="two_pass", pdf_dpi=120)
+    events = _collect_progress([pdf_path], MockProvider(), settings, out, units_total=2)
+    msgs = [e.message for e in events]
+    joined = "\n".join(msgs)
+    for needle in [
+        "Loading", "Loaded 2 page(s)",
+        "Page 1/2 · transcribing (Gemini)", "Page 1/2 · locating lines (Gemini)", "Page 1/2 done",
+        "Page 2/2 · transcribing", "Page 2/2 · locating", "Page 2/2 done",
+        "Writing outputs", "Done — 2 page(s)",
+    ]:
+        assert needle in joined, needle
+    assert "refining word positions" not in joined  # refine off by default
+    # The page counter advances once per finished page and ends at 2/2.
+    page_done = [e for e in events if e.stage == "page_done"]
+    assert [e.units_done for e in page_done] == [1, 2]
+    assert all(e.units_total == 2 for e in events)
+    # Single-file job: no filename prefix.
+    assert all(not m.startswith(pdf_path.name) for m in msgs)
+
+
+def test_progress_one_pass_single_call(png_path, tmp_path):
+    out = tmp_path / "out"
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = _collect_progress([png_path], MockProvider(), settings, out, units_total=1)
+    joined = "\n".join(e.message for e in events)
+    assert "Page 1/1 · transcribing + locating (Gemini)" in joined
+    assert "locating lines (Gemini)" not in joined  # no separate detect step
+
+
+def test_progress_text_mode_uses_tesseract_wording(tmp_path):
+    if not tesseract_client.is_available():
+        pytest.skip("Tesseract binary not installed")
+    out = tmp_path / "out"
+    page = _printed_page(tmp_path)
+    settings = Settings(content_type="text")
+    events = _collect_progress([page], MockProvider(), settings, out, units_total=1)
+    joined = "\n".join(e.message for e in events)
+    assert "reading text (Tesseract)" in joined
+    assert "Gemini" not in joined
+
+
+def test_progress_batch_prefixes_filenames(png_path, tmp_path):
+    out = tmp_path / "out"
+    second = tmp_path / "second.png"
+    second.write_bytes(png_path.read_bytes())
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = _collect_progress([png_path, second], MockProvider(), settings, out, units_total=2)
+    page_lines = [e.message for e in events if e.stage == "page"]
+    assert any(m.startswith(png_path.name + " · ") for m in page_lines)
+    assert any(m.startswith("second.png · ") for m in page_lines)
+    assert any(e.stage == "batch_done" for e in events)  # batch cap line
+
+
+def test_progress_default_report_is_optional(png_path, tmp_path):
+    # process_file/process_page still work with no reporter passed (back-compat).
+    out = tmp_path / "out"
+    result = process_file(png_path, MockProvider(), Settings(), out)
+    assert result.error is None and result.n_pages == 1

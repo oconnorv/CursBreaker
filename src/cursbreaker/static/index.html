@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=15" />
+  <link rel="stylesheet" href="/static/styles.css?v=16" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -130,6 +130,11 @@
       </div>
       <p id="progress-text" class="muted" role="status" aria-live="polite"></p>
       <p id="token-text" class="muted token-text" role="status" aria-live="polite"></p>
+      <!-- Append-only activity log. role="log" (not a live region) so the whole
+           list isn't re-announced each poll; #activity-live announces just the
+           newest line for screen-reader users. -->
+      <ol id="activity-log" class="activity-log" role="log" aria-label="Activity log" tabindex="0"></ol>
+      <p id="activity-live" class="sr-only" role="status" aria-live="polite"></p>
     </section>
 
     <section class="card" id="results-card" aria-labelledby="results-heading" hidden>
@@ -162,6 +167,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=16"></script>
 </body>
 </html>
