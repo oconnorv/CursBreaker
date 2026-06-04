@@ -111,7 +111,9 @@ def process_page(
             update={"content_type": "handwriting", "refine_word_boxes": True}
         )
     return _process_page_handwriting(
-        loaded, provider, settings, report=report, page_no=page_no, page_total=page_total
+        loaded, provider, settings,
+        report=report, page_no=page_no, page_total=page_total,
+        should_cancel=should_cancel,
     )
 
 
@@ -123,6 +125,7 @@ def _process_page_handwriting(
     report: StepReporter | None = None,
     page_no: int = 0,
     page_total: int = 0,
+    should_cancel: CancelCheck | None = None,
 ) -> PageResult:
     """Gemini transcription (one-pass, or two-pass with line alignment). The
     Gemini text is always authoritative; when ``refine_word_boxes`` is set and
@@ -141,11 +144,18 @@ def _process_page_handwriting(
     else:
         report(f"{pg} · transcribing (Gemini)…", stage="page")
         text = provider.transcribe_text(png)
+        # Cancelled during the first pass? Stop before the second (billed) call
+        # so the user isn't charged for a request they no longer want.
+        if should_cancel and should_cancel():
+            raise JobCancelled()
         report(f"{pg} · locating lines (Gemini)…", stage="page")
         detected = provider.detect_lines(png)
         placed = align_lines(text.splitlines(), detected)
         plain_text = text
 
+    # Skip the (local but per-line) Tesseract refinement if cancelled by now.
+    if should_cancel and should_cancel():
+        raise JobCancelled()
     w, h = loaded.sent_width, loaded.sent_height
     lines: list[TranscribedLine] = []
     for p in placed:

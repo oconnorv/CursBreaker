@@ -459,6 +459,30 @@ def test_cancel_immediately_does_no_work(pdf_path, tmp_path):
     assert prov.transcribe_calls == 0
 
 
+def test_cancel_during_first_pass_skips_second_call(png_path, tmp_path):
+    # Two-pass: a cancel that lands during the first Gemini call (transcribe)
+    # must prevent the second (locate) call -- so the user isn't billed for a
+    # request they no longer want, and cancellation is prompt.
+    out = tmp_path / "out"
+    state = {"cancel": False, "detect_calls": 0}
+
+    class _P(MockProvider):
+        def transcribe_text(self, *a, **k):
+            state["cancel"] = True            # user cancels while pass 1 runs
+            return super().transcribe_text(*a, **k)
+
+        def detect_lines(self, *a, **k):
+            state["detect_calls"] += 1
+            return super().detect_lines(*a, **k)
+
+    settings = Settings(content_type="handwriting", mode="two_pass")
+    results = process_batch(
+        [png_path], _P(), settings, out, should_cancel=lambda: state["cancel"],
+    )
+    assert results == []
+    assert state["detect_calls"] == 0          # the second, billed call never ran
+
+
 def test_no_cancel_completes_normally(png_path, tmp_path):
     out = tmp_path / "out"
     results = process_batch(
