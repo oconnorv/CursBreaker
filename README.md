@@ -134,8 +134,9 @@ environment variable.
 
 ### Accuracy settings (defaults)
 
-- **Model:** `gemini-3.1-pro-preview` (editable; the app also lists the models
-  your key can actually use).
+- **Model:** `gemini-3.1-pro-preview` by default — pick from a short curated
+  dropdown (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite); the app shows each
+  model's published price and uses it to estimate cost automatically.
 - **Temperature:** `0.3`
 - **Thinking budget:** `128` tokens — Humphries' finding is that extra
   reasoning *hurts* handwriting accuracy, so the default is deliberately
