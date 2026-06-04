@@ -250,6 +250,25 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .progress { height: 12px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s; }
 
+/* Append-only, scrollable activity log under the progress bar. Newest line in
+   full text colour; the rest muted. */
+.activity-log {
+  list-style: none; margin: 10px 0 0; padding: 8px 10px;
+  max-height: 220px; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; line-height: 1.55; color: var(--muted);
+}
+.activity-log:empty { display: none; }
+.activity-log li { padding: 1px 0; }
+.activity-log li:last-child { color: var(--text); }
+
+/* Visually hidden but available to assistive tech (newest-line announcer). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 .result { background: var(--panel-2); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
 .result h3 { margin: 0 0 4px; font-size: 15px; }
 .result .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -289,4 +308,5 @@ dialog.modal::backdrop { background: rgba(0,0,0,.7); }
   .btn, .card, .dropzone, input, select, fieldset.field, .theme-switch { border: 1px solid CanvasText; }
   .theme-radio:checked + .theme-seg { background: Highlight; color: HighlightText; }
   .progress-bar { background: Highlight; }
+  .activity-log { border: 1px solid CanvasText; }
 }

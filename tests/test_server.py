@@ -379,6 +379,39 @@ def test_job_status_includes_token_fields(run_with_mock, png_path):
     assert "_provider" not in status
 
 
+def test_append_capped_keeps_most_recent():
+    from cursbreaker.server import _append_capped
+    log = []
+    for i in range(10):
+        _append_capped(log, f"line {i}", cap=4)
+    assert log == ["line 6", "line 7", "line 8", "line 9"]
+
+
+def test_job_status_exposes_activity_log_and_unit_counters(run_with_mock, pdf_path):
+    client.post("/api/settings", json={"mode": "two_pass"})
+    with open(pdf_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("doc.pdf", fh, "application/pdf")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    started = client.post("/api/process", json={"file_ids": [file_id]}).json()
+    status = _wait_done(started["job_id"])
+
+    assert status["status"] == "done"
+    # Page-driven bar units: the 2-page fixture -> 2 of 2.
+    assert status["total_units"] == 2
+    assert status["done_units"] == 2
+    # Verbose activity log is present and captures the real steps.
+    log = status["log"]
+    assert isinstance(log, list) and log
+    joined = "\n".join(log)
+    assert "Loaded 2 page(s)" in joined
+    assert "Page 1/2" in joined and "Page 2/2" in joined
+    assert "Writing outputs" in joined
+    assert isinstance(status["current"], str) and status["current"]
+    assert "stage" in status
+
+
 def test_estimate_not_billable_for_printed_only(png_path):
     # Printed-only runs locally (Tesseract), so there's no Gemini token cost.
     client.post("/api/settings", json={"content_type": "text"})
