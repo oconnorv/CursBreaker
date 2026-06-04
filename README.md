@@ -59,15 +59,22 @@ Use `cursbreaker --no-browser --port 9000` to change the defaults.
 > Prefer not to install Python? See **Downloads / packaging** below for
 > standalone builds.
 
-### Optional: Tesseract (for printed/mixed documents)
+### Tesseract (for printed text)
 
-The **Mixed** and **Printed only** content types use [Tesseract
-OCR](https://github.com/tesseract-ocr/tesseract) locally for typeset text.
-Tesseract is excellent on clean printed text, runs without an API call, and
-gives us *real* per-word boxes and confidences — strictly better than the
-proportional word-box synthesis used for handwriting. CursBreaker works
-without it (Handwriting mode is unaffected); install it when you want the
-other two modes:
+CursBreaker uses [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+locally for typeset text: it powers **Printed only** mode and the optional
+*word-position refinement* in Handwriting mode. Tesseract is excellent on clean
+printed text, runs without an API call, and gives *real* per-word boxes and
+confidences — strictly better than the proportional word-box synthesis used for
+handwriting alone. Handwriting mode itself never needs it.
+
+**The standalone downloads bundle Tesseract** (engine + a default language set),
+so end users need no separate, admin-requiring install — Printed-only works out
+of the box.
+
+Running **from source** (`pip install .`)? The `pytesseract` wrapper ships as a
+dependency, but the engine itself isn't bundled — install it only if you want
+Printed-only mode:
 
 ```bash
 # Linux (Debian/Ubuntu)
@@ -76,20 +83,15 @@ sudo apt install tesseract-ocr
 # macOS
 brew install tesseract
 
-# Windows
-# Use the UB-Mannheim installer:
+# Windows: use the UB-Mannheim installer
 #   https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
-The Python wrapper (`pytesseract`) ships as a dependency, so you only need the
-engine itself. The Settings panel shows a status badge that names *which* piece
-is missing if detection fails and lists the language packs it can see (install
-e.g. `tesseract-ocr-fra` to add French).
-
-If the engine is installed but not on your `PATH` (common on Windows, where the
-UB-Mannheim installer doesn't always add it), point CursBreaker straight at it
-by setting the `TESSERACT_CMD` environment variable to the full path of the
-`tesseract` executable, e.g.:
+The Settings panel speaks up only when the engine is *missing*, and the Advanced
+"Tesseract language" box lists the packs it can see (install e.g.
+`tesseract-ocr-fra` to add French). If the engine is installed but not on your
+`PATH` (common on Windows, where the UB-Mannheim installer doesn't always add
+it), point CursBreaker at it with the `TESSERACT_CMD` environment variable:
 
 ```bash
 # Windows (PowerShell)
@@ -120,8 +122,7 @@ environment variable.
 
 | Content type | What it does | When to use |
 |---|---|---|
-| **Handwriting** (default) | Gemini transcribes the whole page (existing recipe). | Pages that are predominantly handwritten. |
-| **Mixed** | Gemini classifies each line printed/handwritten in one call. Printed lines go to **Tesseract** (real per-word boxes); handwritten lines use Gemini. Outputs are merged locally — **Gemini never sees Tesseract's text** (per Humphries, that confuses it). | Letters with typeset letterhead + handwritten body; ledgers with printed headers + handwritten entries. |
+| **Handwriting** (default) | Gemini transcribes the whole page — printed text included — and its transcription is always the authoritative text. Optionally, **Tesseract refines word *positions*** where its reading agrees with Gemini's (real per-word boxes), without ever changing the wording. | Any page with handwriting, including mixed printed + handwritten (typeset letterhead + handwritten body, printed headers + handwritten entries). |
 | **Printed only** | Tesseract OCRs the whole page locally. **No Gemini call** (no API cost). | Fully typeset documents. |
 
 ### Two modes for handwriting (Two-pass / One-pass)
@@ -171,16 +172,13 @@ workflows) also ingest hOCR directly.
 
 ## Downloads / packaging
 
-A starter GitHub Actions workflow (`.github/workflows/build.yml`) builds
-standalone executables for Windows, macOS and Linux with PyInstaller on tagged
-releases. It still needs a real CI run to validate per-OS bundling of the
-static UI assets.
-
-Bundling the **Tesseract engine** itself into those executables — so end users
-need zero separate install — is explored in
-[`docs/bundling-tesseract.md`](docs/bundling-tesseract.md). The binary-detection
-code already looks for a bundled engine first, so shipping it is a packaging
-change rather than an app-code change.
+A GitHub Actions workflow (`.github/workflows/build.yml`) builds standalone
+executables for Windows, macOS and Linux with PyInstaller on tagged releases. It
+bundles the static UI assets and the **Tesseract engine** (plus a default
+language set) so end users need zero separate, admin-requiring install —
+Printed-only mode works out of the box. The runtime resolver looks for the
+bundled engine first and falls back to a system install; see
+[`docs/bundling-tesseract.md`](docs/bundling-tesseract.md) for the approach.
 
 ## Credits & license
 
