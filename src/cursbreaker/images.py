@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
@@ -147,18 +148,68 @@ def _raster_frames(path: Path, *, dpi: int, max_frames: int = 0) -> list[Image.I
         return _fitz_frames(path, zoom=dpi / 72.0, max_frames=max_frames)
 
 
-def _fitz_frames(path: Path, *, zoom: float, max_frames: int = 0) -> list[Image.Image]:
-    frames: list[Image.Image] = []
+def _iter_fitz_frames(path: Path, *, zoom: float, max_frames: int = 0) -> Iterator[Image.Image]:
+    """Rasterize a PDF (or Pillow-undecodable file) one page at a time with
+    PyMuPDF, yielding lazily so a caller can stop early -- only the current page
+    is held in memory, and cancellation isn't blocked behind a whole-document
+    render."""
     matrix = fitz.Matrix(zoom, zoom)
+    yielded = 0
     with fitz.open(path) as doc:
         for page in doc:
             pix = page.get_pixmap(matrix=matrix, alpha=False)
-            frames.append(
-                Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-            )
-            if max_frames and len(frames) >= max_frames:
-                break
-    return frames
+            yield Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            yielded += 1
+            if max_frames and yielded >= max_frames:
+                return
+
+
+def _fitz_frames(path: Path, *, zoom: float, max_frames: int = 0) -> list[Image.Image]:
+    return list(_iter_fitz_frames(path, zoom=zoom, max_frames=max_frames))
+
+
+def iter_pages(
+    path: str | Path,
+    *,
+    preprocess: bool = True,
+    max_dimension: int = 0,
+    pdf_dpi: int = 300,
+    max_pages: int = 0,
+) -> Iterator[LoadedPage]:
+    """Yield one ``LoadedPage`` at a time. PDFs are rasterized lazily (one page
+    per ``next()``), so a large document doesn't block the caller in a single
+    long render and only one page sits in memory at once. Raster files (usually
+    1 frame; multi-frame TIFF/GIF are small) load eagerly to keep their
+    decode-fallback robust. ``max_pages`` (>0) stops after that many pages."""
+    path = Path(path)
+    ext = path.suffix.lower()
+    if ext not in SUPPORTED_EXT:
+        raise ValueError(f"Unsupported file type: {ext}")
+    # Whether to suffix output stems with a page number -- from a cheap metadata
+    # read, so it doesn't depend on having rendered everything first.
+    multi = count_content_pages(path) > 1
+
+    if ext in PDF_EXT:
+        frames: Iterator[Image.Image] = _iter_fitz_frames(
+            path, zoom=pdf_dpi / 72.0, max_frames=max_pages
+        )
+    else:
+        frames = iter(_raster_frames(path, dpi=pdf_dpi, max_frames=max_pages))
+
+    for i, frame in enumerate(frames):
+        orig_w, orig_h = frame.size
+        processed = _preprocess(
+            frame, enabled=preprocess, max_dimension=max_dimension
+        )
+        stem = f"{path.stem}_page_{i + 1:04d}" if multi else path.stem
+        yield LoadedPage(
+            image=processed,
+            orig_width=orig_w,
+            orig_height=orig_h,
+            source_path=path,
+            page_index=i,
+            output_stem=stem,
+        )
 
 
 def load_pages(
@@ -169,39 +220,15 @@ def load_pages(
     pdf_dpi: int = 300,
     max_pages: int = 0,
 ) -> list[LoadedPage]:
-    """Load one input file into a list of pages. ``max_pages`` (>0) loads only
-    the first N content pages -- the cost estimate uses this to render just the
-    first page of a large file rather than rasterizing the whole document."""
-    path = Path(path)
-    ext = path.suffix.lower()
-    if ext not in SUPPORTED_EXT:
-        raise ValueError(f"Unsupported file type: {ext}")
-
-    pages: list[LoadedPage] = []
-    if ext in PDF_EXT:
-        raw_frames = _rasterize_pdf(path, dpi=pdf_dpi, max_frames=max_pages)
-    else:
-        raw_frames = _raster_frames(path, dpi=pdf_dpi, max_frames=max_pages)
-
-    multi = len(raw_frames) > 1
-    for i, frame in enumerate(raw_frames):
-        orig_w, orig_h = frame.size
-        processed = _preprocess(
-            frame, enabled=preprocess, max_dimension=max_dimension
+    """Eager list of pages -- a back-compat wrapper around ``iter_pages``.
+    ``max_pages`` (>0) loads only the first N content pages (the cost estimate
+    renders just the first page of a large file)."""
+    return list(
+        iter_pages(
+            path,
+            preprocess=preprocess,
+            max_dimension=max_dimension,
+            pdf_dpi=pdf_dpi,
+            max_pages=max_pages,
         )
-        stem = f"{path.stem}_page_{i + 1:04d}" if multi else path.stem
-        pages.append(
-            LoadedPage(
-                image=processed,
-                orig_width=orig_w,
-                orig_height=orig_h,
-                source_path=path,
-                page_index=i,
-                output_stem=stem,
-            )
-        )
-    return pages
-
-
-def _rasterize_pdf(path: Path, *, dpi: int, max_frames: int = 0) -> list[Image.Image]:
-    return _fitz_frames(path, zoom=dpi / 72.0, max_frames=max_frames)
+    )

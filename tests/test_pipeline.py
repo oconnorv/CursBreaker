@@ -335,7 +335,7 @@ def test_progress_reports_step_sequence_two_pass(pdf_path, tmp_path):
     msgs = [e.message for e in events]
     joined = "\n".join(msgs)
     for needle in [
-        "Loading", "Loaded 2 page(s)",
+        "Loading", "2 page(s) to transcribe",
         "Page 1/2 · transcribing (Gemini)", "Page 1/2 · locating lines (Gemini)", "Page 1/2 done",
         "Page 2/2 · transcribing", "Page 2/2 · locating", "Page 2/2 done",
         "Writing outputs", "Done — 2 page(s)",
@@ -392,14 +392,24 @@ def test_progress_default_report_is_optional(png_path, tmp_path):
 
 # --- cooperative cancellation -------------------------------------------- #
 
-def _cancel_after(n):
-    """A should_cancel predicate that returns True from its (n+1)th call on."""
-    calls = {"n": 0}
+class _CountingProvider(MockProvider):
+    """Counts how many pages were actually transcribed (to prove cancellation
+    stops the expensive work, not just the loop)."""
 
-    def check():
-        calls["n"] += 1
-        return calls["n"] > n
-    return check
+    def __init__(self):
+        super().__init__()
+        self.transcribe_calls = 0
+
+    def transcribe_text(self, *a, **k):
+        self.transcribe_calls += 1
+        return super().transcribe_text(*a, **k)
+
+    def transcribe_with_boxes(self, *a, **k):
+        self.transcribe_calls += 1
+        return super().transcribe_with_boxes(*a, **k)
+
+    def detect_lines(self, *a, **k):
+        return super().detect_lines(*a, **k)
 
 
 def test_cancel_stops_before_next_file(png_path, tmp_path):
@@ -408,27 +418,45 @@ def test_cancel_stops_before_next_file(png_path, tmp_path):
     f3 = tmp_path / "c.png"; f3.write_bytes(png_path.read_bytes())
     events = []
     settings = Settings(content_type="handwriting", mode="one_pass")
-    # Cancel decided on the 3rd check: batch(f1)=1, page1=2, batch(f2)=3 -> stop.
+    # Cancel once the first file has fully finished (its .txt is written), so it
+    # completes and the batch stops before the second file.
+    done_first = out / "sample.txt"
     results = process_batch(
         [png_path, f2, f3], MockProvider(), settings, out, events.append,
-        units_total=3, should_cancel=_cancel_after(2),
+        units_total=3, should_cancel=lambda: done_first.exists(),
     )
     assert len(results) == 1                       # only the first file finished
     assert results[0].error is None
     assert any(e.stage == "cancelled" for e in events)
 
 
-def test_cancel_mid_file_drops_partial(pdf_path, tmp_path):
+def test_cancel_mid_file_drops_partial_and_skips_remaining_pages(pdf_path, tmp_path):
     out = tmp_path / "out"
     events = []
+    prov = _CountingProvider()
     settings = Settings(content_type="handwriting", mode="one_pass", pdf_dpi=120)
-    # 2-page file; cancel before page 2 -> the whole partial file is abandoned.
+    # 2-page file; cancel once page 1's PNG is saved -> page 2 is never rendered
+    # or transcribed, and the whole partial file is abandoned.
+    after_p1 = out / "doc_page_0001.png"
     results = process_batch(
-        [pdf_path], MockProvider(), settings, out, events.append,
-        units_total=2, should_cancel=_cancel_after(2),
+        [pdf_path], prov, settings, out, events.append,
+        units_total=2, should_cancel=lambda: after_p1.exists(),
     )
     assert results == []
+    assert prov.transcribe_calls == 1              # page 2 never processed
     assert any(e.stage == "cancelled" for e in events)
+
+
+def test_cancel_immediately_does_no_work(pdf_path, tmp_path):
+    # A cancel that's already set when the job starts renders/transcribes nothing
+    # (the lazy loader is never advanced -- no minute-long blocking rasterize).
+    out = tmp_path / "out"
+    prov = _CountingProvider()
+    results = process_batch(
+        [pdf_path], prov, Settings(), out, should_cancel=lambda: True
+    )
+    assert results == []
+    assert prov.transcribe_calls == 0
 
 
 def test_no_cancel_completes_normally(png_path, tmp_path):

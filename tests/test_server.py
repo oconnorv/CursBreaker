@@ -428,7 +428,7 @@ def test_job_status_exposes_activity_log_and_unit_counters(run_with_mock, pdf_pa
     log = status["log"]
     assert isinstance(log, list) and log
     joined = "\n".join(log)
-    assert "Loaded 2 page(s)" in joined
+    assert "2 page(s) to transcribe" in joined
     assert "Page 1/2" in joined and "Page 2/2" in joined
     assert "Writing outputs" in joined
     assert isinstance(status["current"], str) and status["current"]
