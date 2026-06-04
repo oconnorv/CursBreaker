@@ -106,6 +106,12 @@ check("done forces bar to 100%", el("progress-bar").style.width === "100%", el("
 check("done aria-valuenow 100", el("progress").getAttribute("aria-valuenow") === "100");
 check("done headline shows file count", el("progress-text").textContent === "Done — 2 file(s)", el("progress-text").textContent);
 
+// --- Group B2: cancelled keeps its partial bar fraction + headline ------ //
+freshDom();
+renderProgress({ status: "cancelled", total_units: 4, done_units: 2, log: ["Cancelled."], results: [{}] });
+check("cancelled keeps partial bar (not forced to 100)", el("progress-bar").style.width === "50%", el("progress-bar").style.width);
+check("cancelled headline shows completed count", el("progress-text").textContent === "Cancelled — 1 file(s) completed", el("progress-text").textContent);
+
 // --- Group C: stick to bottom ONLY when already at the bottom ----------- //
 freshDom();
 const log = el("activity-log");

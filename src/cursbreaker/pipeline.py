@@ -52,6 +52,16 @@ StepReporter = Callable[..., None]
 def _noop(*_args, **_kwargs) -> None:
     pass
 
+
+# Cooperative-cancellation predicate, checked at page/file boundaries (a
+# synchronous Gemini call can't be interrupted mid-flight).
+CancelCheck = Callable[[], bool]
+
+
+class JobCancelled(Exception):
+    """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
+    partially-processed file is abandoned cleanly (not recorded as an error)."""
+
 # Pre-flight estimate only: a transparent, clearly-labelled assumption for how
 # many tokens one Gemini call returns (transcription text plus a little
 # thinking). Output length is genuinely unknowable until the page is read, so
@@ -238,6 +248,7 @@ def process_file(
     out_dir: Path,
     *,
     report: StepReporter | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> FileResult:
     report = report or _noop
     path = Path(path)
@@ -260,6 +271,11 @@ def process_file(
     page_results: list[PageResult] = []
     image_names: list[str] = []
     for i, loaded in enumerate(loaded_pages, start=1):
+        # Cooperative cancellation: stop before starting the next page (an
+        # in-flight Gemini call can't be interrupted, so this is the finest
+        # granularity). Abandons this file's partial work without writing it.
+        if should_cancel and should_cancel():
+            raise JobCancelled()
         page_results.append(
             process_page(
                 loaded, provider, settings,
@@ -332,16 +348,19 @@ def process_batch(
     out_dir: Path,
     report: Reporter | None = None,
     units_total: int = 0,
+    should_cancel: CancelCheck | None = None,
 ) -> list[FileResult]:
     """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
 
     ``units_total`` is the total page count across the batch (the bar is
     page-driven); the running "pages done" counter advances on each ``page_done``
     step. Messages are prefixed with the filename only when the batch has more
-    than one file."""
+    than one file. ``should_cancel`` (checked between files and pages) stops the
+    batch cooperatively; files already finished keep their outputs."""
     results: list[FileResult] = []
     total = len(paths)
     state = {"done": 0}  # pages completed across the whole batch
+    cancelled = False
 
     for idx, path in enumerate(paths):
         name = Path(path).name
@@ -360,15 +379,31 @@ def process_batch(
                     units_done=state["done"], units_total=units_total,
                 ))
 
+        if should_cancel and should_cancel():  # stop before starting a new file
+            cancelled = True
+            break
         try:
             results.append(
-                process_file(path, provider, settings, out_dir, report=report_line)
+                process_file(
+                    path, provider, settings, out_dir,
+                    report=report_line, should_cancel=should_cancel,
+                )
             )
+        except JobCancelled:  # cancelled mid-file: drop the partial file, stop
+            cancelled = True
+            break
         except Exception as exc:  # one bad file must not kill the batch
             results.append(FileResult(source_name=name, error=str(exc)))
             report_line(f"Failed: {exc}", stage="error")
 
-    if report and total > 1:
+    if report and cancelled:
+        report(ProgressEvent(
+            message="Cancelled.", stage="cancelled",
+            file_index=0, file_total=total,
+            file_name=Path(paths[0]).name if paths else "",
+            units_done=state["done"], units_total=units_total,
+        ))
+    elif report and total > 1:
         report(ProgressEvent(
             message="All files complete.", stage="batch_done",
             file_index=max(0, total - 1), file_total=total,

@@ -388,3 +388,52 @@ def test_progress_default_report_is_optional(png_path, tmp_path):
     out = tmp_path / "out"
     result = process_file(png_path, MockProvider(), Settings(), out)
     assert result.error is None and result.n_pages == 1
+
+
+# --- cooperative cancellation -------------------------------------------- #
+
+def _cancel_after(n):
+    """A should_cancel predicate that returns True from its (n+1)th call on."""
+    calls = {"n": 0}
+
+    def check():
+        calls["n"] += 1
+        return calls["n"] > n
+    return check
+
+
+def test_cancel_stops_before_next_file(png_path, tmp_path):
+    out = tmp_path / "out"
+    f2 = tmp_path / "b.png"; f2.write_bytes(png_path.read_bytes())
+    f3 = tmp_path / "c.png"; f3.write_bytes(png_path.read_bytes())
+    events = []
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    # Cancel decided on the 3rd check: batch(f1)=1, page1=2, batch(f2)=3 -> stop.
+    results = process_batch(
+        [png_path, f2, f3], MockProvider(), settings, out, events.append,
+        units_total=3, should_cancel=_cancel_after(2),
+    )
+    assert len(results) == 1                       # only the first file finished
+    assert results[0].error is None
+    assert any(e.stage == "cancelled" for e in events)
+
+
+def test_cancel_mid_file_drops_partial(pdf_path, tmp_path):
+    out = tmp_path / "out"
+    events = []
+    settings = Settings(content_type="handwriting", mode="one_pass", pdf_dpi=120)
+    # 2-page file; cancel before page 2 -> the whole partial file is abandoned.
+    results = process_batch(
+        [pdf_path], MockProvider(), settings, out, events.append,
+        units_total=2, should_cancel=_cancel_after(2),
+    )
+    assert results == []
+    assert any(e.stage == "cancelled" for e in events)
+
+
+def test_no_cancel_completes_normally(png_path, tmp_path):
+    out = tmp_path / "out"
+    results = process_batch(
+        [png_path], MockProvider(), Settings(), out, should_cancel=lambda: False
+    )
+    assert len(results) == 1 and results[0].error is None

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=16" />
+  <link rel="stylesheet" href="/static/styles.css?v=17" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -123,7 +123,10 @@
     </section>
 
     <section class="card" id="progress-card" aria-labelledby="progress-heading" hidden>
-      <div class="card-head"><h2 id="progress-heading">Progress</h2></div>
+      <div class="card-head">
+        <h2 id="progress-heading">Progress</h2>
+        <button id="cancel-job" class="btn small" type="button" hidden>Cancel</button>
+      </div>
       <div id="progress" class="progress" role="progressbar"
            aria-labelledby="progress-heading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="progress-bar" class="progress-bar"></div>
@@ -167,6 +170,6 @@
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
   </footer>
 
-  <script src="/static/app.js?v=16"></script>
+  <script src="/static/app.js?v=17"></script>
 </body>
 </html>
