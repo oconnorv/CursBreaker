@@ -406,8 +406,19 @@ def cancel_job(job_id: str):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
-    if job["status"] == "running":
-        job["_cancel"] = True
+    if job["status"] == "running" and not job.get("_cancel"):
+        # Acknowledge in the activity log immediately (before the worker reaches
+        # a cancel boundary) and explain why it isn't instant. "page" stage means
+        # a Gemini/Tesseract call is in flight and can't be interrupted.
+        if job.get("stage") == "page":
+            msg = ("Cancellation requested — the current page is already being "
+                   "processed by Gemini and can't be interrupted, so this will "
+                   "take effect once the current step finishes.")
+        else:
+            msg = "Cancellation requested — stopping after the current step finishes."
+        _append_capped(job["log"], msg)
+        job["current"] = msg
+        job["_cancel"] = True  # set last, so the message is logged before the worker stops
     return {"status": job["status"], "cancelling": bool(job.get("_cancel"))}
 
 

@@ -448,8 +448,14 @@ def test_cancel_running_job(run_with_slow_mock, pdf_path):
     jid = started["job_id"]
     r = client.post(f"/api/jobs/{jid}/cancel").json()
     assert r["cancelling"] is True
+    # The cancellation notice is in the activity log immediately -- before the
+    # worker reaches a cancel boundary (it's still mid-call).
+    interim = client.get(f"/api/jobs/{jid}").json()
+    assert any("Cancellation requested" in line for line in interim["log"])
     status = _wait_done(jid)
     assert status["status"] == "cancelled"
+    # ...and the final "Cancelled." line is there once it actually stops.
+    assert any(line == "Cancelled." for line in status["log"])
     # The app is still alive and serving after a cancel.
     assert client.get("/").status_code == 200
 
