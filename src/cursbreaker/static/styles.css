@@ -84,29 +84,56 @@ main:focus-visible, main:focus { outline: none; }
 h1 { margin: 0; font-size: 22px; }
 .tagline { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 
-/* Theme switcher */
-.theme-toggle {
-  flex: none; display: inline-flex; align-items: center; gap: 7px;
-  padding: 8px 12px; min-height: 36px; border-radius: 10px;
-  background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--border-strong); cursor: pointer; font-size: 13px;
+/* Theme switcher: a segmented control showing BOTH options at once so it's
+   clear what it does. The active segment is highlighted; clicking either side
+   (or arrow-keying within the group) selects that theme. Built from native
+   radios -- visually hidden but focusable -- so grouping + keyboard work for
+   screen readers, with the focus ring routed onto the visible label. */
+.theme-switch {
+  flex: none; display: inline-flex; align-items: stretch;
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  overflow: hidden; background: var(--panel-2);
 }
-.theme-toggle:hover { border-color: var(--link); }
-.theme-icon { font-size: 14px; line-height: 1; }
+.theme-radio { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.theme-radio:focus-visible { outline: none; }   /* ring goes on the label instead */
+.theme-seg {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; min-height: 36px; font-size: 13px;
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+.theme-seg .seg-icon { font-size: 14px; line-height: 1; }
+.theme-seg + .theme-radio + .theme-seg { border-left: 1px solid var(--border-strong); }
+/* Active segment inverts (text colour as background) -- high contrast in both
+   themes and an unmistakable "selected". */
+.theme-radio:checked + .theme-seg { background: var(--text); color: var(--panel); font-weight: 600; }
+.theme-radio:focus-visible + .theme-seg { outline: 3px solid var(--focus); outline-offset: -3px; }
 
+/* Wide screens: Settings becomes a sidebar (holding the key/Tesseract status
+   and all config) so the working area -- upload, estimate, progress, results --
+   starts at the top of the main column instead of below a tall form. The page
+   widens to use the side margins; narrow screens fall back to a single stack. */
 main {
-  max-width: 880px; margin: 0 auto; padding: 8px 20px 60px;
-  display: flex; flex-direction: column; gap: 18px;
+  max-width: 1160px; margin: 0 auto; padding: 8px 20px 60px;
+  display: grid; grid-template-columns: 360px minmax(0, 1fr);
+  align-items: start; gap: 18px;
+}
+.work-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+/* Keep the settings/status sidebar in view while the results column scrolls. */
+#settings-card { position: sticky; top: 12px; }
+
+@media (max-width: 960px) {
+  main { grid-template-columns: 1fr; max-width: 880px; }
+  #settings-card { position: static; }
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 18px;
   box-shadow: var(--shadow);
 }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .card-head h2 { margin: 0; font-size: 16px; flex: 1; }
 
 /* Collapsible Settings card: a heading containing a button (the ARIA disclosure
@@ -135,7 +162,7 @@ main {
   .topbar { padding: 14px 16px; }
 }
 
-.field { display: block; margin: 12px 0; }
+.field { display: block; margin: 10px 0; }
 .field > span, .field > label, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .hint { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
@@ -259,6 +286,7 @@ dialog.modal::backdrop { background: rgba(0,0,0,.7); }
 /* Windows High Contrast / forced-colors: keep focus + boundaries visible. */
 @media (forced-colors: active) {
   :where(a, button, summary, input, select, [tabindex]):focus-visible { outline: 3px solid Highlight; }
-  .btn, .card, .dropzone, input, select, fieldset.field, .theme-toggle { border: 1px solid CanvasText; }
+  .btn, .card, .dropzone, input, select, fieldset.field, .theme-switch { border: 1px solid CanvasText; }
+  .theme-radio:checked + .theme-seg { background: Highlight; color: HighlightText; }
   .progress-bar { background: Highlight; }
 }

@@ -38,10 +38,16 @@ class ModelPricing:
     output_per_mtok_high: float = 0.0
 
 
-# The dropdown, in display order. gemini-3.1-pro-preview stays the saved default
-# (most accurate for handwriting); the lighter models trade some accuracy for a
-# much lower price.
+# The dropdown, in display order. gemini-3.1-pro-preview is first and is the
+# saved default (most accurate for handwriting); the lighter models follow,
+# trading some accuracy for a much lower price.
 CATALOG: list[ModelPricing] = [
+    ModelPricing(
+        "gemini-3.1-pro-preview", "Gemini 3.1 Pro (preview)",
+        input_per_mtok=2.00, output_per_mtok=12.00,
+        tier_threshold=200_000,
+        input_per_mtok_high=4.00, output_per_mtok_high=18.00,
+    ),
     ModelPricing(
         "gemini-3.5-flash", "Gemini 3.5 Flash",
         input_per_mtok=1.50, output_per_mtok=9.00,
@@ -49,12 +55,6 @@ CATALOG: list[ModelPricing] = [
     ModelPricing(
         "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite",
         input_per_mtok=0.25, output_per_mtok=1.50,
-    ),
-    ModelPricing(
-        "gemini-3.1-pro-preview", "Gemini 3.1 Pro (preview)",
-        input_per_mtok=2.00, output_per_mtok=12.00,
-        tier_threshold=200_000,
-        input_per_mtok_high=4.00, output_per_mtok_high=18.00,
     ),
 ]
 

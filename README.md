@@ -116,9 +116,6 @@ environment variable.
 4. **Preview boxes** — overlay the detected line boxes on the page to verify the
    localization before you trust it.
 
-No API key handy? Flip on **Demo mode** to exercise the whole workflow with
-sample output.
-
 ### Content type (you choose per batch)
 
 | Content type | What it does | When to use |

@@ -1,8 +1,9 @@
 """Transcription providers.
 
 ``GeminiProvider`` wraps the official ``google-genai`` SDK. ``MockProvider``
-returns deterministic sample output so the entire application (UI, pipeline,
-hOCR export) can be exercised without a real API key.
+returns deterministic sample output and exists only for the test suite, so the
+pipeline and hOCR export can be exercised without a real API key or network --
+it is not exposed to users.
 
 The defaults follow the recipe from Mark Humphries' "Gemini 3 Solves
 Handwriting Recognition": temperature 0, high media resolution, and a
@@ -98,8 +99,6 @@ class TranscriptionProvider(Protocol):
 
 
 def make_provider(settings: Settings) -> TranscriptionProvider:
-    if settings.use_mock:
-        return MockProvider()
     return GeminiProvider(settings)
 
 
@@ -107,7 +106,7 @@ def make_provider(settings: Settings) -> TranscriptionProvider:
 class KeyStatus:
     """Result of a cheap, generation-free check that an API key still works."""
 
-    state: str          # valid | invalid | unknown | no_key | mock
+    state: str          # valid | invalid | unknown | no_key
     message: str = ""
 
 
@@ -215,8 +214,6 @@ def check_api_key(settings: Settings) -> KeyStatus:
     caught here -- in Settings -- instead of mid-transcription. A genuine auth
     failure is reported as ``invalid``; anything ambiguous (offline, timeout,
     5xx, rate-limit) is ``unknown`` so a good key is never called dead."""
-    if settings.use_mock:
-        return KeyStatus("mock", "Demo mode is on -- no real API call is made.")
     key = settings.resolved_api_key()
     if not key:
         return KeyStatus("no_key", "No API key is stored.")
@@ -239,13 +236,13 @@ def check_api_key(settings: Settings) -> KeyStatus:
 
 class GeminiProvider:
     def __init__(self, settings: Settings):
-        from google import genai  # imported lazily so --mock works offline
+        from google import genai  # imported lazily so the rest of the app loads without the SDK
 
         api_key = settings.resolved_api_key()
         if not api_key:
             raise RuntimeError(
-                "No Gemini API key set. Add one in Settings or set "
-                "GEMINI_API_KEY, or enable mock mode."
+                "No Gemini API key set. Add one in Settings or set the "
+                "GEMINI_API_KEY environment variable."
             )
         self.settings = settings
         self._genai = genai
@@ -497,7 +494,9 @@ def _strip_code_fence(text: str) -> str:
 
 
 class MockProvider:
-    """Deterministic sample output for keyless testing and demos."""
+    """Deterministic sample output for the test suite only -- it lets the
+    pipeline, hOCR and server be exercised without a real key or network. Not
+    wired to any user-facing setting (there is no demo mode)."""
 
     _LINES = [
         "This is a CursBreaker mock transcription.",
@@ -507,8 +506,7 @@ class MockProvider:
     ]
 
     def __init__(self):
-        # Demo mode makes no real API call, so nothing is ever billed; the
-        # counter stays at zero, which is the honest figure to show.
+        # Makes no real API call, so nothing is billed; the counter stays at zero.
         self.usage = TokenUsage()
 
     def transcribe_text(self, image_png: bytes, mime: str = "image/png") -> str:

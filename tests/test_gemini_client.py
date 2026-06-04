@@ -32,10 +32,6 @@ def test_is_auth_error_ignores_transient_failures():
     assert not _is_auth_error(ConnectionError("network down"))
 
 
-def test_check_api_key_mock_skips_network():
-    assert check_api_key(Settings(use_mock=True)).state == "mock"
-
-
 def test_check_api_key_no_key():
     # isolated_config fixture clears ambient GEMINI_API_KEY/GOOGLE_API_KEY.
     assert check_api_key(Settings()).state == "no_key"
@@ -288,7 +284,7 @@ def test_count_input_tokens_returns_zero_on_failure():
 def test_mock_provider_tracks_zero_usage():
     prov = gemini_client.MockProvider()
     prov.transcribe_text(b"img")
-    # Demo mode makes no real call, so nothing is billed.
+    # MockProvider makes no real call, so nothing is billed.
     assert prov.usage.total == 0
     assert prov.usage.calls == 0
     assert prov.count_input_tokens(b"img") == 0

@@ -22,7 +22,7 @@ async function api(method, url, body) {
 // ---- settings ----------------------------------------------------------- //
 const NUMERIC = ["temperature", "thinking_budget", "pdf_dpi", "max_dimension", "word_confidence"];
 const TEXT = ["thinking_level", "media_resolution", "tesseract_language"];
-const BOOL = ["use_mock", "preprocess", "refine_word_boxes"];
+const BOOL = ["preprocess", "refine_word_boxes"];
 
 function gatherSettings() {
   const s = {};
@@ -46,12 +46,7 @@ function applyKeyStatus(data) {
   const badge = $("key-status");
   const info = $("key-info");
   info.hidden = false;
-  if (data.use_mock) {
-    badge.textContent = "Demo mode"; badge.className = "badge ok";
-    info.className = "key-info";
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">●</span><span>Demo mode is on — no real API call will be made.</span>`;
-  } else if (data.api_key_set) {
+  if (data.api_key_set) {
     badge.textContent = "Key saved"; badge.className = "badge ok";
     info.className = "key-info";
     const where = data.api_key_source === "env"
@@ -70,7 +65,7 @@ function applyKeyStatus(data) {
 // Free, proactive check that a stored key still works. ListModels costs no
 // generation tokens/quota, so a revoked/expired key is caught here in Settings
 // instead of failing mid-transcription. Only "valid"/"invalid" change the
-// badge; "unknown" (offline/transient) and "no_key"/"mock" leave it untouched.
+// badge; "unknown" (offline/transient) and "no_key" leave it untouched.
 async function verifyKey() {
   let data;
   try { data = await api("GET", "/api/key-status"); }
@@ -106,7 +101,7 @@ async function loadSettings() {
   const ctRadio = document.querySelector(`input[name=content_type][value="${s.content_type}"]`);
   if (ctRadio) ctRadio.checked = true;
   applyKeyStatus(s);
-  verifyKey(); // background-verify the stored key (no-op when none/mock)
+  verifyKey(); // background-verify the stored key (no-op when no key set)
 }
 
 async function loadTesseractStatus() {
@@ -117,34 +112,30 @@ async function loadTesseractStatus() {
     return;
   }
   const info = $("tesseract-info");
-  if (!info) return;
-  info.hidden = false;
-  if (data.available) {
-    info.className = "key-info";
-    const langs = (data.languages || []).join(", ") || "eng";
-    const ver = data.version ? ` v${escapeHtml(data.version)}` : "";
-    const SOURCE_NOTE = {
-      bundled: " (bundled with CursBreaker)",
-      managed: " (portable build in your CursBreaker folder)",
-    };
-    const src = SOURCE_NOTE[data.source] || "";
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">✓</span><span>Tesseract${ver} installed${src} &mdash; languages: <span class="mono">${escapeHtml(langs)}</span>. Required for Mixed and Printed-only modes.</span>`;
-  } else {
-    info.className = "key-info warn";
-    let detail;
-    if (data.wrapper_present === false) {
-      detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+  if (info) {
+    if (data.available) {
+      // Tesseract ships bundled with the app, so confirming "it's installed" is
+      // just noise. Stay silent when it works; only speak up when it's missing
+      // (Printed-only and word-box refinement genuinely won't run without it).
+      info.hidden = true;
+      info.innerHTML = "";
     } else {
-      const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
-      // No-admin path: a portable build dropped into the app-managed folder.
-      const portable = data.managed_dir
-        ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
-        : "";
-      detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+      info.hidden = false;
+      info.className = "key-info warn";
+      let detail;
+      if (data.wrapper_present === false) {
+        detail = `The <span class="mono">pytesseract</span> Python package is missing. Reinstall CursBreaker (<span class="mono">pip install .</span>) and restart.`;
+      } else {
+        const hint = data.install_hint ? escapeHtml(data.install_hint) + " " : "";
+        // No-admin path: a portable build dropped into the app-managed folder.
+        const portable = data.managed_dir
+          ? ` No admin rights? Unzip a portable Tesseract into <span class="mono">${escapeHtml(data.managed_dir)}</span> (binary + a <span class="mono">tessdata</span> subfolder).`
+          : "";
+        detail = `Tesseract OCR engine not detected. ${hint}${portable} Or set <span class="mono">TESSERACT_CMD</span> to the full path of the executable and restart.`;
+      }
+      info.innerHTML =
+        `<span class="glyph" aria-hidden="true">!</span><span>${detail} Printed-only mode and word-box refinement need it; Handwriting mode still works as usual.</span>`;
     }
-    info.innerHTML =
-      `<span class="glyph" aria-hidden="true">!</span><span>${detail} Mixed and Printed-only modes need it; Handwriting mode still works as usual.</span>`;
   }
   // Populate the language datalist with whatever's actually installed.
   const dl = $("tesseract-langs");
@@ -557,8 +548,10 @@ function wire() {
   // Settings disclosure (heading > button) toggle + theme switcher.
   $("settings-toggle").onclick = () =>
     setSettingsOpen($("settings-toggle").getAttribute("aria-expanded") !== "true");
-  $("theme-toggle").onclick = () =>
-    setTheme(currentTheme() === "light" ? "dark" : "light");
+  // Segmented theme control: both options visible; selecting either (click or
+  // arrow keys) applies it. Native radios fire 'change' on selection.
+  for (const r of document.querySelectorAll('input[name="theme"]'))
+    r.addEventListener("change", () => setTheme(r.value));
 
   const dlg = $("modal");
   $("modal-close").onclick = closePreview;
@@ -590,13 +583,9 @@ function setTheme(theme) {
   const root = document.documentElement;
   if (theme === "light") root.dataset.theme = "light";
   else delete root.dataset.theme;            // dark is the default (no attribute)
-  const btn = $("theme-toggle");
-  if (btn) {
-    const next = theme === "light" ? "dark" : "light";   // what the button switches to
-    btn.setAttribute("aria-label", `Switch to ${next} theme`);
-    btn.querySelector(".theme-label").textContent = next === "light" ? "Light" : "Dark";
-    btn.querySelector(".theme-icon").textContent = next === "light" ? "☀️" : "🌙";
-  }
+  // Reflect the choice in the always-visible segmented control.
+  const radio = $(theme === "light" ? "theme-light" : "theme-dark");
+  if (radio) radio.checked = true;
   try { localStorage.setItem("cb.theme", theme); } catch (e) {}
 }
 
