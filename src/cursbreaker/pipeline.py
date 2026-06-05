@@ -8,6 +8,7 @@ re-rendered to PNG at the dimensions the bounding boxes refer to, so the
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -16,7 +17,7 @@ from .align import align_lines, align_words
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
-from .images import count_content_pages, iter_pages, load_pages
+from .images import blank_png, count_content_pages, iter_pages, load_pages
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
 from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
 from .searchable_pdf import build_searchable_pdf
@@ -62,12 +63,18 @@ class JobCancelled(Exception):
     """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
     partially-processed file is abandoned cleanly (not recorded as an error)."""
 
-# Pre-flight estimate only: a transparent, clearly-labelled assumption for how
-# many tokens one Gemini call returns (transcription text plus a little
-# thinking). Output length is genuinely unknowable until the page is read, so
-# this is surfaced to the user rather than hidden -- the live counter shows the
-# real number during the run.
-_EST_OUTPUT_TOKENS_PER_CALL = 800
+# Pre-flight output-token estimate, per page, as a LOW-HIGH range. Output is
+# genuinely unpredictable before a page is read: it scales with how much text is
+# on the page (sparse page -> little output -> cheaper; dense page -> lots ->
+# pricier), and nothing measurable up front predicts it -- real handwriting docs
+# we measured ran ~3,900-8,000 output tokens/page in two-pass at the SAME
+# input/page. So rather than a single number that's ~2x off for some documents,
+# we estimate a range that brackets the realistic spread; the UI shows it as a
+# range and explains that denser pages cost more. One-pass makes a single
+# structured call (~0.6x of two-pass, which also emits the plain text on its own
+# first call).
+_EST_OUTPUT_PER_PAGE_LOW = {"two_pass": 3000, "one_pass": 1800}
+_EST_OUTPUT_PER_PAGE_HIGH = {"two_pass": 9000, "one_pass": 5400}
 
 
 @dataclass
@@ -466,55 +473,89 @@ def estimate_usage(
     else:
         calls_per_page = 1 if settings.mode == "one_pass" else 2
 
-    input_tokens = 0
-    total_pages = 0
-    for path in paths:
+    def _estimate_file(path) -> tuple[int, int]:
+        """Return (page_count, input_token_estimate) for one file. Kept fast so a
+        batch can run these concurrently."""
         path = Path(path)
         try:
             n_pages = count_content_pages(path)
         except Exception:
             n_pages = 1
-        total_pages += n_pages
         if calls_per_page == 0:
-            continue
-        # Render only the first page (cheap even for a big PDF) and scale its
-        # measured input tokens across the file's pages and per-page calls.
+            return n_pages, 0
         try:
+            # Render only the first page, and WITHOUT preprocessing: the slow
+            # median-filter denoise doesn't change the image's dimensions, and
+            # count_tokens depends only on dimensions, so skipping it is free
+            # accuracy-wise but much faster.
             first = load_pages(
                 path,
-                preprocess=settings.preprocess,
+                preprocess=False,
                 max_dimension=settings.max_dimension,
                 pdf_dpi=settings.pdf_dpi,
                 max_pages=1,
             )[0]
-            per_page_input = provider.count_input_tokens(first.to_png_bytes())
+            # Probe with a blank image of the same size: same (geometric) token
+            # count, a few KB to upload instead of a multi-MB scan.
+            per_page_input = provider.count_input_tokens(blank_png(first.image.size))
         except Exception:
             per_page_input = 0
-        input_tokens += per_page_input * n_pages * calls_per_page
+        return n_pages, per_page_input * n_pages * calls_per_page
+
+    # Files are independent; overlap their (network-bound) count_tokens calls.
+    input_tokens = 0
+    total_pages = 0
+    if paths:
+        with ThreadPoolExecutor(max_workers=min(8, len(paths))) as ex:
+            for n_pages, file_input in ex.map(_estimate_file, paths):
+                total_pages += n_pages
+                input_tokens += file_input
 
     calls = total_pages * calls_per_page
-    output_tokens = calls * _EST_OUTPUT_TOKENS_PER_CALL
-    usage = TokenUsage(input=input_tokens, output=output_tokens, calls=calls)
+    # Output is a per-page RANGE (sparse vs dense pages); see the constants above.
+    mode = "one_pass" if settings.mode == "one_pass" else "two_pass"
+    if calls_per_page == 0:
+        per_page_low = per_page_high = 0
+    else:
+        per_page_low = _EST_OUTPUT_PER_PAGE_LOW[mode]
+        per_page_high = _EST_OUTPUT_PER_PAGE_HIGH[mode]
+    output_low = total_pages * per_page_low
+    output_high = total_pages * per_page_high
 
     # Price automatically from the selected model's published rate (no manual
     # entry). No catalog entry, or no calls -> tokens only, no dollar figure.
     pricing = pricing_for(settings.transcription_model)
+
+    def _cost(output):
+        if not (pricing and calls):
+            return None
+        return cost_for(pricing, TokenUsage(input=input_tokens, output=output, calls=calls))
+
+    cost_low = _cost(output_low)
+    cost_high = _cost(output_high)
     if pricing and calls:
-        in_rate, out_rate = effective_rates(pricing, usage)
-        cost = cost_for(pricing, usage)
+        # Tier (effective rate) is set by the per-call prompt size, identical for
+        # both ends, so either gives the rates to display.
+        in_rate, out_rate = effective_rates(
+            pricing, TokenUsage(input=input_tokens, output=output_high, calls=calls)
+        )
     else:
         in_rate = out_rate = 0.0
-        cost = None
     return {
         "files": len(paths),
         "pages": total_pages,
         "calls": calls,
         "calls_per_page": calls_per_page,
-        "input": usage.input,
-        "output": usage.output,  # assumed; see assumed_output_tokens_per_call
-        "total": usage.total,
-        "assumed_output_tokens_per_call": _EST_OUTPUT_TOKENS_PER_CALL,
-        "cost": cost,
+        "input": input_tokens,
+        # Output (and thus cost) is a range -- assumed, see per_page_low/high.
+        "output_low": output_low,
+        "output_high": output_high,
+        "total_low": input_tokens + output_low,
+        "total_high": input_tokens + output_high,
+        "per_page_low": per_page_low,
+        "per_page_high": per_page_high,
+        "cost_low": cost_low,
+        "cost_high": cost_high,
         "model": settings.transcription_model,
         "model_label": pricing.label if pricing else settings.transcription_model,
         "price_input_per_mtok": in_rate,

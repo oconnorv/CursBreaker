@@ -461,14 +461,12 @@ function formatTokens(n) {
   return Number(n || 0).toLocaleString();
 }
 
-// Dollar amounts can be tiny; scale precision so a sub-cent estimate isn't
-// rounded away to "$0.00".
+// Under $1, show cents to the tenth (e.g. "12.3¢") — small jobs read better in
+// cents than as "$0.123". $1 and up stays in dollars to the cent ("$1.23").
 function formatCost(usd) {
   if (usd === null || usd === undefined) return "";
   const v = Number(usd);
-  if (v === 0) return "$0.00";
-  if (v < 0.01) return "$" + v.toFixed(4);
-  if (v < 1) return "$" + v.toFixed(3);
+  if (v < 1) return (v * 100).toFixed(1) + "¢";  // ¢ = cent sign
   return "$" + v.toFixed(2);
 }
 
@@ -540,13 +538,13 @@ function renderEstimate(d) {
     return `<div class="estimate-line"><span class="glyph" aria-hidden="true">●</span>`
       + `<span>No Gemini tokens for these ${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span></div>`;
   }
-  const hasCost = d.cost !== null && d.cost !== undefined;
-  // Headline figure, large: the estimated cost -- or the token total when a
-  // model has no published price, so there's still something prominent up top.
+  const hasCost = d.cost_low !== null && d.cost_low !== undefined;
+  // Headline: an estimated cost RANGE (output scales with how much text is on
+  // the page) -- or a token range when the model has no published price.
   const headline = hasCost
-    ? `<div class="estimate-cost"><span class="estimate-cost-num">~${formatCost(d.cost)}</span>`
-      + `<span class="estimate-cost-label">estimated cost &mdash; not a guarantee</span></div>`
-    : `<div class="estimate-cost"><span class="estimate-cost-num">${formatTokens(d.total)}</span>`
+    ? `<div class="estimate-cost"><span class="estimate-cost-num">~${formatCost(d.cost_low)}–${formatCost(d.cost_high)}</span>`
+      + `<span class="estimate-cost-label">estimated range &mdash; not a guarantee</span></div>`
+    : `<div class="estimate-cost"><span class="estimate-cost-num">${formatTokens(d.total_low)}–${formatTokens(d.total_high)}</span>`
       + `<span class="estimate-cost-label">tokens &mdash; no published price for this model</span></div>`;
   // Supporting detail as bullets rather than a paragraph.
   const points = [];
@@ -555,8 +553,8 @@ function renderEstimate(d) {
     + (d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "")
   );
   points.push(
-    `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output)}</b> output tokens`
-    + ` <span class="muted">(~${formatTokens(d.assumed_output_tokens_per_call)}/call across ${formatTokens(d.calls)} call(s))</span>`
+    `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output_low)}–${formatTokens(d.output_high)}</b> output tokens`
+    + ` <span class="muted">(assuming ~${formatTokens(d.per_page_low)}–${formatTokens(d.per_page_high)} output tokens/page across ${formatTokens(d.pages)} page(s))</span>`
   );
   if (hasCost) {
     points.push(
@@ -566,9 +564,9 @@ function renderEstimate(d) {
     );
   }
   points.push(
-    `<span class="muted">Token counts are exact; the dollar amount is an estimate. Input is measured `
-    + `from the first page of each file and output length varies, so treat it as a ballpark &mdash; the `
-    + `live counter shows real usage during the run.</span>`
+    `<span class="muted">The range tracks how much text is on each page &mdash; pages with less writing `
+    + `cost less, pages with more cost more. Both ends are estimates: input is measured from the first `
+    + `page (and scaled), output is assumed. The live counter shows the real usage during the run.</span>`
   );
   const lis = points.map((p) => `<li>${p}</li>`).join("");
   return `${headline}<ul class="estimate-points">${lis}</ul>`;

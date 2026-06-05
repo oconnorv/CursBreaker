@@ -475,8 +475,8 @@ def test_estimate_not_billable_for_printed_only(png_path):
     r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
     assert r["billable"] is False
     assert "Printed-only" in r["reason"]
-    assert r["total"] == 0
-    assert r["cost"] is None
+    assert r["total_low"] == 0 and r["total_high"] == 0
+    assert r["cost_low"] is None and r["cost_high"] is None
 
 
 def test_estimate_requires_key_when_billable(png_path):
@@ -516,9 +516,12 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
     assert r["billable"] is True
     assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
-    # Cost is derived automatically from the selected model's published price.
-    expected = 1000 / 1_000_000 * 0.25 + 800 / 1_000_000 * 1.50
-    assert r["cost"] == pytest.approx(expected)
+    # Cost is a range derived from the model's published price; one-pass output
+    # range is 1800..5400 tokens/page.
+    expected_low = 1000 / 1_000_000 * 0.25 + 1800 / 1_000_000 * 1.50
+    expected_high = 1000 / 1_000_000 * 0.25 + 5400 / 1_000_000 * 1.50
+    assert r["cost_low"] == pytest.approx(expected_low)
+    assert r["cost_high"] == pytest.approx(expected_high)
     assert r["model"] == "gemini-3.1-flash-lite"
     assert r["price_input_per_mtok"] == 0.25
 
