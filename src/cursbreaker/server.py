@@ -260,6 +260,7 @@ def process(req: ProcessRequest):
         "error": None,
         "model": model,
         "tokens": _usage_to_dict(None, model),  # zeros until the provider exists
+        "_cancel": False,          # private flag flipped by /api/jobs/{id}/cancel
     }
     threading.Thread(
         target=_run_job, args=(job_id, paths, settings, out_dir), daemon=True
@@ -304,7 +305,8 @@ def _run_job(job_id, paths, settings, out_dir):
             _append_capped(job["log"], ev.message)
 
         results = process_batch(
-            paths, provider, settings, out_dir, report, units_total=total_units
+            paths, provider, settings, out_dir, report, units_total=total_units,
+            should_cancel=lambda: bool(job.get("_cancel")),
         )
         job["results"] = [
             {
@@ -324,7 +326,8 @@ def _run_job(job_id, paths, settings, out_dir):
             for r in results
         ]
         job["tokens"] = _usage_to_dict(provider.usage, job["model"])
-        job["status"] = "done"
+        # Completed files (if any) are kept and downloadable even on cancel.
+        job["status"] = "cancelled" if job.get("_cancel") else "done"
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)
@@ -392,6 +395,31 @@ def job_status(job_id: str):
     if not job:
         raise HTTPException(404, "Unknown job.")
     return _public_job(job)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Request cooperative cancellation of a running job. The worker stops at the
+    next page/file boundary (an in-flight Gemini call can't be interrupted), so
+    the status flips to ``cancelled`` shortly after; files already finished stay
+    downloadable. A no-op on a job that's already finished."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown job.")
+    if job["status"] == "running" and not job.get("_cancel"):
+        # Acknowledge in the activity log immediately (before the worker reaches
+        # a cancel boundary) and explain why it isn't instant. "page" stage means
+        # a Gemini/Tesseract call is in flight and can't be interrupted.
+        if job.get("stage") == "page":
+            msg = ("Cancellation requested — the current page is already being "
+                   "processed by Gemini and can't be interrupted, so this will "
+                   "take effect once the current step finishes.")
+        else:
+            msg = "Cancellation requested — stopping after the current step finishes."
+        _append_capped(job["log"], msg)
+        job["current"] = msg
+        job["_cancel"] = True  # set last, so the message is logged before the worker stops
+    return {"status": job["status"], "cancelling": bool(job.get("_cancel"))}
 
 
 # --------------------------------------------------------------------------- #

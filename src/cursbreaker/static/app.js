@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 let staged = [];      // [{id, name, pages}]
 let pollTimer = null;
+let activeJobId = null;  // the running job, for the Cancel button
 
 async function api(method, url, body) {
   const opts = { method, headers: {} };
@@ -268,11 +269,26 @@ async function transcribe() {
   $("results").innerHTML = "";
   try {
     const { job_id } = await api("POST", "/api/process", { file_ids: staged.map((f) => f.id) });
+    activeJobId = job_id;
+    const cancel = $("cancel-job");
+    if (cancel) { cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel"; }
     $("progress-card").hidden = false;
     pollJob(job_id);
   } catch (e) {
     $("action-note").textContent = "Error: " + e.message;
     $("transcribe").disabled = false;
+  }
+}
+
+async function cancelJob() {
+  if (!activeJobId) return;
+  const btn = $("cancel-job");
+  if (btn) { btn.disabled = true; btn.textContent = "Cancelling…"; }
+  try {
+    await api("POST", `/api/jobs/${activeJobId}/cancel`);
+  } catch (e) {
+    // Re-enable so the user can retry if the request itself failed.
+    if (btn) { btn.disabled = false; btn.textContent = "Cancel"; }
   }
 }
 
@@ -289,9 +305,11 @@ function renderProgress(job) {
   $("progress-bar").style.width = pct + "%";
   $("progress").setAttribute("aria-valuenow", String(pct));
 
-  // Concise headline above the log.
+  // Concise headline above the log. (Cancelled keeps its partial bar fraction —
+  // only "done" forces 100%.)
   $("progress-text").textContent =
     job.status === "error" ? "Error: " + job.error
+    : job.status === "cancelled" ? `Cancelled — ${(job.results || []).length} file(s) completed`
     : job.status === "done" ? `Done — ${(job.results || []).length} file(s)`
     : total ? `Processing — page ${done}/${total}`
     : "Processing…";
@@ -342,13 +360,19 @@ function pollJob(jobId) {
     }
     if (job.status !== "running") {
       clearInterval(pollTimer);
+      activeJobId = null;
+      const cancel = $("cancel-job");
+      if (cancel) { cancel.hidden = true; cancel.disabled = false; cancel.textContent = "Cancel"; }
       $("transcribe").disabled = false;
       $("estimate").disabled = staged.length === 0;
-      if (job.status === "done") {
+      // Show whatever finished — completed files remain downloadable on cancel.
+      if ((job.status === "done" || job.status === "cancelled") && (job.results || []).length) {
         renderResults(jobId, job);
-        // Send keyboard/screen-reader focus to the freshly-rendered results.
-        const h = $("results-heading");
-        if (h) h.focus();
+        if (job.status === "done") {
+          // Send keyboard/screen-reader focus to the freshly-rendered results.
+          const h = $("results-heading");
+          if (h) h.focus();
+        }
       }
     }
   };
@@ -589,6 +613,7 @@ function wire() {
 
   $("transcribe").onclick = transcribe;
   $("estimate").onclick = estimateCost;
+  $("cancel-job").onclick = cancelJob;
 
   // Settings disclosure (heading > button) toggle + theme switcher.
   $("settings-toggle").onclick = () =>

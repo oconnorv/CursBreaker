@@ -191,6 +191,10 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .btn.small { padding: 7px 12px; font-size: 13px; min-height: 32px; }
 .btn.primary { background: linear-gradient(135deg, var(--accent), #6a49ff); border: none; font-weight: 600; color: #fff; }
 .btn.primary:disabled { opacity: .5; cursor: not-allowed; }
+/* Cancel: hint that it's a "stop" action on hover (not destructive — completed
+   files are kept). */
+#cancel-job:hover { border-color: var(--err-ink); color: var(--err-ink); }
+#cancel-job:disabled { opacity: .6; cursor: default; }
 
 .badge { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); color: var(--text); }
 .badge.ok { background: rgba(37,194,129,.16); color: var(--ok-ink); }

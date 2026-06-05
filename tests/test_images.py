@@ -89,3 +89,25 @@ def test_pdf_rasterizes_each_page(pdf_path):
     assert abs(pages[0].sent_width - 1275) <= 2
     assert pages[0].output_stem == "doc_page_0001"
     assert pages[1].output_stem == "doc_page_0002"
+
+
+def test_iter_pages_renders_pdf_lazily(pdf_path, monkeypatch):
+    # The whole point of the lazy loader: rendering one page does NOT rasterize
+    # the rest of the document (so a 48-page PDF can be cancelled promptly and
+    # only one page sits in memory at a time).
+    from cursbreaker import images
+
+    calls = {"n": 0}
+    real = images.Image.frombytes
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(images.Image, "frombytes", counting)
+    it = images.iter_pages(pdf_path, pdf_dpi=72)
+    next(it)                       # render only the first page
+    assert calls["n"] == 1         # page 2 of the 2-page PDF is NOT rendered yet
+    next(it)
+    assert calls["n"] == 2         # advancing renders the next page
+    it.close()

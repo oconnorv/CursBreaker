@@ -32,6 +32,29 @@ def run_with_mock(monkeypatch):
     return MockProvider
 
 
+@pytest.fixture
+def run_with_slow_mock(monkeypatch):
+    """Like run_with_mock but each Gemini call sleeps briefly, so a job stays
+    'running' long enough to be cancelled deterministically."""
+    import time as _time
+    from cursbreaker import server
+    from cursbreaker.gemini_client import MockProvider
+
+    class _Slow(MockProvider):
+        def transcribe_text(self, *a, **k):
+            _time.sleep(0.2); return super().transcribe_text(*a, **k)
+
+        def detect_lines(self, *a, **k):
+            _time.sleep(0.2); return super().detect_lines(*a, **k)
+
+        def transcribe_with_boxes(self, *a, **k):
+            _time.sleep(0.2); return super().transcribe_with_boxes(*a, **k)
+
+    monkeypatch.setattr(server, "make_provider", lambda s: _Slow())
+    client.post("/api/settings", json={"api_key": "AIza_test_dummy_key_ABCDEF"})
+    return _Slow
+
+
 def test_settings_hides_key_and_roundtrips():
     r = client.get("/api/settings").json()
     assert r["api_key_set"] is False
@@ -405,11 +428,40 @@ def test_job_status_exposes_activity_log_and_unit_counters(run_with_mock, pdf_pa
     log = status["log"]
     assert isinstance(log, list) and log
     joined = "\n".join(log)
-    assert "Loaded 2 page(s)" in joined
+    assert "2 page(s) to transcribe" in joined
     assert "Page 1/2" in joined and "Page 2/2" in joined
     assert "Writing outputs" in joined
     assert isinstance(status["current"], str) and status["current"]
     assert "stage" in status
+    # The private cancel flag is never serialized to the client.
+    assert "_cancel" not in status
+
+
+def test_cancel_running_job(run_with_slow_mock, pdf_path):
+    client.post("/api/settings", json={"mode": "two_pass"})  # 2 calls/page -> slow
+    with open(pdf_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("doc.pdf", fh, "application/pdf")}
+        ).json()
+    file_id = up["files"][0]["id"]
+    started = client.post("/api/process", json={"file_ids": [file_id]}).json()
+    jid = started["job_id"]
+    r = client.post(f"/api/jobs/{jid}/cancel").json()
+    assert r["cancelling"] is True
+    # The cancellation notice is in the activity log immediately -- before the
+    # worker reaches a cancel boundary (it's still mid-call).
+    interim = client.get(f"/api/jobs/{jid}").json()
+    assert any("Cancellation requested" in line for line in interim["log"])
+    status = _wait_done(jid)
+    assert status["status"] == "cancelled"
+    # ...and the final "Cancelled." line is there once it actually stops.
+    assert any(line == "Cancelled." for line in status["log"])
+    # The app is still alive and serving after a cancel.
+    assert client.get("/").status_code == 200
+
+
+def test_cancel_unknown_job_is_404():
+    assert client.post("/api/jobs/does-not-exist/cancel").status_code == 404
 
 
 def test_estimate_not_billable_for_printed_only(png_path):

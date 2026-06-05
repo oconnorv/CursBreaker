@@ -16,7 +16,7 @@ from .align import align_lines, align_words
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
-from .images import count_content_pages, load_pages
+from .images import count_content_pages, iter_pages, load_pages
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
 from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
 from .searchable_pdf import build_searchable_pdf
@@ -52,6 +52,16 @@ StepReporter = Callable[..., None]
 def _noop(*_args, **_kwargs) -> None:
     pass
 
+
+# Cooperative-cancellation predicate, checked at page/file boundaries (a
+# synchronous Gemini call can't be interrupted mid-flight).
+CancelCheck = Callable[[], bool]
+
+
+class JobCancelled(Exception):
+    """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
+    partially-processed file is abandoned cleanly (not recorded as an error)."""
+
 # Pre-flight estimate only: a transparent, clearly-labelled assumption for how
 # many tokens one Gemini call returns (transcription text plus a little
 # thinking). Output length is genuinely unknowable until the page is read, so
@@ -82,8 +92,13 @@ def process_page(
     report: StepReporter | None = None,
     page_no: int = 0,
     page_total: int = 0,
+    should_cancel: CancelCheck | None = None,
 ) -> PageResult:
     report = report or _noop
+    # A cancel that landed while this page was rendering is caught here, before
+    # the expensive transcription call is made.
+    if should_cancel and should_cancel():
+        raise JobCancelled()
     content = (settings.content_type or "handwriting").lower()
     if content == "text":
         return _process_page_text_only(
@@ -96,7 +111,9 @@ def process_page(
             update={"content_type": "handwriting", "refine_word_boxes": True}
         )
     return _process_page_handwriting(
-        loaded, provider, settings, report=report, page_no=page_no, page_total=page_total
+        loaded, provider, settings,
+        report=report, page_no=page_no, page_total=page_total,
+        should_cancel=should_cancel,
     )
 
 
@@ -108,6 +125,7 @@ def _process_page_handwriting(
     report: StepReporter | None = None,
     page_no: int = 0,
     page_total: int = 0,
+    should_cancel: CancelCheck | None = None,
 ) -> PageResult:
     """Gemini transcription (one-pass, or two-pass with line alignment). The
     Gemini text is always authoritative; when ``refine_word_boxes`` is set and
@@ -126,11 +144,18 @@ def _process_page_handwriting(
     else:
         report(f"{pg} · transcribing (Gemini)…", stage="page")
         text = provider.transcribe_text(png)
+        # Cancelled during the first pass? Stop before the second (billed) call
+        # so the user isn't charged for a request they no longer want.
+        if should_cancel and should_cancel():
+            raise JobCancelled()
         report(f"{pg} · locating lines (Gemini)…", stage="page")
         detected = provider.detect_lines(png)
         placed = align_lines(text.splitlines(), detected)
         plain_text = text
 
+    # Skip the (local but per-line) Tesseract refinement if cancelled by now.
+    if should_cancel and should_cancel():
+        raise JobCancelled()
     w, h = loaded.sent_width, loaded.sent_height
     lines: list[TranscribedLine] = []
     for p in placed:
@@ -238,6 +263,7 @@ def process_file(
     out_dir: Path,
     *,
     report: StepReporter | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> FileResult:
     report = report or _noop
     path = Path(path)
@@ -248,31 +274,51 @@ def process_file(
     usage_before = _provider_usage(provider)
 
     report("Loading…", stage="load")
-    loaded_pages = load_pages(
+    # Page count from cheap metadata (no rasterization), so a 48-page PDF doesn't
+    # block here for a minute before the first cancel check -- pages are rendered
+    # lazily, one per loop, with a cancel check before each.
+    total_pages = count_content_pages(path)
+    report(f"{total_pages} page(s) to transcribe", stage="load")
+
+    page_results: list[PageResult] = []
+    image_names: list[str] = []
+    pages = iter_pages(
         path,
         preprocess=settings.preprocess,
         max_dimension=settings.max_dimension,
         pdf_dpi=settings.pdf_dpi,
     )
-    total_pages = len(loaded_pages)
-    report(f"Loaded {total_pages} page(s)", stage="load")
-
-    page_results: list[PageResult] = []
-    image_names: list[str] = []
-    for i, loaded in enumerate(loaded_pages, start=1):
-        page_results.append(
-            process_page(
-                loaded, provider, settings,
-                report=report, page_no=i, page_total=total_pages,
+    i = 0
+    try:
+        while True:
+            # Cooperative cancellation, checked BEFORE rendering the next page
+            # (the render happens inside next()). A second check inside
+            # process_page catches a cancel that lands mid-render, before the
+            # expensive transcription. Either abandons this file's partial work.
+            if should_cancel and should_cancel():
+                raise JobCancelled()
+            try:
+                loaded = next(pages)
+            except StopIteration:
+                break
+            i += 1
+            page_results.append(
+                process_page(
+                    loaded, provider, settings,
+                    report=report, page_no=i, page_total=total_pages,
+                    should_cancel=should_cancel,
+                )
             )
-        )
-        png_name = f"{loaded.output_stem}.png"
-        loaded.image.save(out_dir / png_name)
-        image_names.append(png_name)
-        # A page counts as "done" (advancing the bar) once it's transcribed and
-        # its PNG is saved; process_batch increments the global page counter on
-        # this stage.
-        report(f"Page {i}/{total_pages} done", stage="page_done")
+            png_name = f"{loaded.output_stem}.png"
+            loaded.image.save(out_dir / png_name)
+            image_names.append(png_name)
+            # A page counts as "done" (advancing the bar) once it's transcribed
+            # and its PNG is saved; process_batch increments the global page
+            # counter on this stage.
+            report(f"Page {i}/{total_pages} done", stage="page_done")
+    finally:
+        # Close the lazy renderer (releases the open PDF) if we bailed early.
+        pages.close()
 
     report("Writing outputs (text, hOCR, searchable PDF)…", stage="write")
     stem = path.stem
@@ -302,11 +348,12 @@ def process_file(
     )
     (out_dir / pdf_name).write_bytes(pdf_bytes)
 
+    n_pages = len(page_results)
     n_lines = sum(len(p.lines) for p in page_results)
-    report(f"Done — {total_pages} page(s), {n_lines} line(s)", stage="file_done")
+    report(f"Done — {n_pages} page(s), {n_lines} line(s)", stage="file_done")
     return FileResult(
         source_name=path.name,
-        n_pages=len(page_results),
+        n_pages=n_pages,
         n_lines=n_lines,
         txt_name=txt_name,
         hocr_name=hocr_name,
@@ -332,16 +379,19 @@ def process_batch(
     out_dir: Path,
     report: Reporter | None = None,
     units_total: int = 0,
+    should_cancel: CancelCheck | None = None,
 ) -> list[FileResult]:
     """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
 
     ``units_total`` is the total page count across the batch (the bar is
     page-driven); the running "pages done" counter advances on each ``page_done``
     step. Messages are prefixed with the filename only when the batch has more
-    than one file."""
+    than one file. ``should_cancel`` (checked between files and pages) stops the
+    batch cooperatively; files already finished keep their outputs."""
     results: list[FileResult] = []
     total = len(paths)
     state = {"done": 0}  # pages completed across the whole batch
+    cancelled = False
 
     for idx, path in enumerate(paths):
         name = Path(path).name
@@ -360,15 +410,31 @@ def process_batch(
                     units_done=state["done"], units_total=units_total,
                 ))
 
+        if should_cancel and should_cancel():  # stop before starting a new file
+            cancelled = True
+            break
         try:
             results.append(
-                process_file(path, provider, settings, out_dir, report=report_line)
+                process_file(
+                    path, provider, settings, out_dir,
+                    report=report_line, should_cancel=should_cancel,
+                )
             )
+        except JobCancelled:  # cancelled mid-file: drop the partial file, stop
+            cancelled = True
+            break
         except Exception as exc:  # one bad file must not kill the batch
             results.append(FileResult(source_name=name, error=str(exc)))
             report_line(f"Failed: {exc}", stage="error")
 
-    if report and total > 1:
+    if report and cancelled:
+        report(ProgressEvent(
+            message="Cancelled.", stage="cancelled",
+            file_index=0, file_total=total,
+            file_name=Path(paths[0]).name if paths else "",
+            units_done=state["done"], units_total=units_total,
+        ))
+    elif report and total > 1:
         report(ProgressEvent(
             message="All files complete.", stage="batch_done",
             file_index=max(0, total - 1), file_total=total,

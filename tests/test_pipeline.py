@@ -335,7 +335,7 @@ def test_progress_reports_step_sequence_two_pass(pdf_path, tmp_path):
     msgs = [e.message for e in events]
     joined = "\n".join(msgs)
     for needle in [
-        "Loading", "Loaded 2 page(s)",
+        "Loading", "2 page(s) to transcribe",
         "Page 1/2 · transcribing (Gemini)", "Page 1/2 · locating lines (Gemini)", "Page 1/2 done",
         "Page 2/2 · transcribing", "Page 2/2 · locating", "Page 2/2 done",
         "Writing outputs", "Done — 2 page(s)",
@@ -388,3 +388,104 @@ def test_progress_default_report_is_optional(png_path, tmp_path):
     out = tmp_path / "out"
     result = process_file(png_path, MockProvider(), Settings(), out)
     assert result.error is None and result.n_pages == 1
+
+
+# --- cooperative cancellation -------------------------------------------- #
+
+class _CountingProvider(MockProvider):
+    """Counts how many pages were actually transcribed (to prove cancellation
+    stops the expensive work, not just the loop)."""
+
+    def __init__(self):
+        super().__init__()
+        self.transcribe_calls = 0
+
+    def transcribe_text(self, *a, **k):
+        self.transcribe_calls += 1
+        return super().transcribe_text(*a, **k)
+
+    def transcribe_with_boxes(self, *a, **k):
+        self.transcribe_calls += 1
+        return super().transcribe_with_boxes(*a, **k)
+
+    def detect_lines(self, *a, **k):
+        return super().detect_lines(*a, **k)
+
+
+def test_cancel_stops_before_next_file(png_path, tmp_path):
+    out = tmp_path / "out"
+    f2 = tmp_path / "b.png"; f2.write_bytes(png_path.read_bytes())
+    f3 = tmp_path / "c.png"; f3.write_bytes(png_path.read_bytes())
+    events = []
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    # Cancel once the first file has fully finished (its .txt is written), so it
+    # completes and the batch stops before the second file.
+    done_first = out / "sample.txt"
+    results = process_batch(
+        [png_path, f2, f3], MockProvider(), settings, out, events.append,
+        units_total=3, should_cancel=lambda: done_first.exists(),
+    )
+    assert len(results) == 1                       # only the first file finished
+    assert results[0].error is None
+    assert any(e.stage == "cancelled" for e in events)
+
+
+def test_cancel_mid_file_drops_partial_and_skips_remaining_pages(pdf_path, tmp_path):
+    out = tmp_path / "out"
+    events = []
+    prov = _CountingProvider()
+    settings = Settings(content_type="handwriting", mode="one_pass", pdf_dpi=120)
+    # 2-page file; cancel once page 1's PNG is saved -> page 2 is never rendered
+    # or transcribed, and the whole partial file is abandoned.
+    after_p1 = out / "doc_page_0001.png"
+    results = process_batch(
+        [pdf_path], prov, settings, out, events.append,
+        units_total=2, should_cancel=lambda: after_p1.exists(),
+    )
+    assert results == []
+    assert prov.transcribe_calls == 1              # page 2 never processed
+    assert any(e.stage == "cancelled" for e in events)
+
+
+def test_cancel_immediately_does_no_work(pdf_path, tmp_path):
+    # A cancel that's already set when the job starts renders/transcribes nothing
+    # (the lazy loader is never advanced -- no minute-long blocking rasterize).
+    out = tmp_path / "out"
+    prov = _CountingProvider()
+    results = process_batch(
+        [pdf_path], prov, Settings(), out, should_cancel=lambda: True
+    )
+    assert results == []
+    assert prov.transcribe_calls == 0
+
+
+def test_cancel_during_first_pass_skips_second_call(png_path, tmp_path):
+    # Two-pass: a cancel that lands during the first Gemini call (transcribe)
+    # must prevent the second (locate) call -- so the user isn't billed for a
+    # request they no longer want, and cancellation is prompt.
+    out = tmp_path / "out"
+    state = {"cancel": False, "detect_calls": 0}
+
+    class _P(MockProvider):
+        def transcribe_text(self, *a, **k):
+            state["cancel"] = True            # user cancels while pass 1 runs
+            return super().transcribe_text(*a, **k)
+
+        def detect_lines(self, *a, **k):
+            state["detect_calls"] += 1
+            return super().detect_lines(*a, **k)
+
+    settings = Settings(content_type="handwriting", mode="two_pass")
+    results = process_batch(
+        [png_path], _P(), settings, out, should_cancel=lambda: state["cancel"],
+    )
+    assert results == []
+    assert state["detect_calls"] == 0          # the second, billed call never ran
+
+
+def test_no_cancel_completes_normally(png_path, tmp_path):
+    out = tmp_path / "out"
+    results = process_batch(
+        [png_path], MockProvider(), Settings(), out, should_cancel=lambda: False
+    )
+    assert len(results) == 1 and results[0].error is None
