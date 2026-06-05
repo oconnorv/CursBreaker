@@ -57,6 +57,16 @@ def is_supported(path: str | Path) -> bool:
     return Path(path).suffix.lower() in SUPPORTED_EXT
 
 
+def blank_png(size: tuple[int, int]) -> bytes:
+    """A tiny solid-white PNG of the given pixel size. Gemini counts image tokens
+    geometrically (tiling by dimensions, independent of content), so counting on
+    this yields the same token count as the real page with a ~KB upload instead
+    of multiple MB -- used to make the pre-flight estimate fast."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _is_thumbnail_frame(im: Image.Image) -> bool:
     """Return True for a TIFF frame flagged as a reduced-resolution thumbnail
     or transparency mask via the ``NewSubfileType`` tag (254).

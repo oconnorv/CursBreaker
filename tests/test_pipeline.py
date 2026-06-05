@@ -306,6 +306,18 @@ def test_estimate_scales_input_by_page_count(pdf_path):
     assert d["input"] == 500 * 2 * 1        # first-page count scaled by 2 pages
 
 
+def test_estimate_sums_across_multiple_files(png_path, tmp_path):
+    # Files are estimated concurrently; the totals must still sum correctly.
+    f2 = tmp_path / "b.png"; f2.write_bytes(png_path.read_bytes())
+    f3 = tmp_path / "c.png"; f3.write_bytes(png_path.read_bytes())
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    d = estimate_usage([png_path, f2, f3], _BillingProvider(), settings)
+    assert d["files"] == 3
+    assert d["pages"] == 3
+    assert d["input"] == 500 * 3            # 500/page * 3 single-page files
+    assert d["output"] == 2400 * 3
+
+
 def test_estimate_prices_automatically_from_selected_model(png_path):
     # Flat-priced model: cost comes straight from the catalog, no manual entry.
     settings = Settings(

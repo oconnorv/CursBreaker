@@ -8,6 +8,7 @@ re-rendered to PNG at the dimensions the bounding boxes refer to, so the
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -16,7 +17,7 @@ from .align import align_lines, align_words
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
-from .images import count_content_pages, iter_pages, load_pages
+from .images import blank_png, count_content_pages, iter_pages, load_pages
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
 from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
 from .searchable_pdf import build_searchable_pdf
@@ -473,31 +474,43 @@ def estimate_usage(
     else:
         calls_per_page = 1 if settings.mode == "one_pass" else 2
 
-    input_tokens = 0
-    total_pages = 0
-    for path in paths:
+    def _estimate_file(path) -> tuple[int, int]:
+        """Return (page_count, input_token_estimate) for one file. Kept fast so a
+        batch can run these concurrently."""
         path = Path(path)
         try:
             n_pages = count_content_pages(path)
         except Exception:
             n_pages = 1
-        total_pages += n_pages
         if calls_per_page == 0:
-            continue
-        # Render only the first page (cheap even for a big PDF) and scale its
-        # measured input tokens across the file's pages and per-page calls.
+            return n_pages, 0
         try:
+            # Render only the first page, and WITHOUT preprocessing: the slow
+            # median-filter denoise doesn't change the image's dimensions, and
+            # count_tokens depends only on dimensions, so skipping it is free
+            # accuracy-wise but much faster.
             first = load_pages(
                 path,
-                preprocess=settings.preprocess,
+                preprocess=False,
                 max_dimension=settings.max_dimension,
                 pdf_dpi=settings.pdf_dpi,
                 max_pages=1,
             )[0]
-            per_page_input = provider.count_input_tokens(first.to_png_bytes())
+            # Probe with a blank image of the same size: same (geometric) token
+            # count, a few KB to upload instead of a multi-MB scan.
+            per_page_input = provider.count_input_tokens(blank_png(first.image.size))
         except Exception:
             per_page_input = 0
-        input_tokens += per_page_input * n_pages * calls_per_page
+        return n_pages, per_page_input * n_pages * calls_per_page
+
+    # Files are independent; overlap their (network-bound) count_tokens calls.
+    input_tokens = 0
+    total_pages = 0
+    if paths:
+        with ThreadPoolExecutor(max_workers=min(8, len(paths))) as ex:
+            for n_pages, file_input in ex.map(_estimate_file, paths):
+                total_pages += n_pages
+                input_tokens += file_input
 
     calls = total_pages * calls_per_page
     # Output scales per page, by mode: one-pass = one structured call; two-pass =
