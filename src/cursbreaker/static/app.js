@@ -425,10 +425,9 @@ function renderResults(jobId, job) {
         btn.setAttribute("aria-label", `Preview detected line boxes for ${r.source_name}${pageSuffix}`);
         btn.onclick = () => openPreview(im.preview, `${r.source_name} — detected lines${pageSuffix}`);
         links.appendChild(btn);
-        const a = document.createElement("a");
-        a.className = "btn small"; a.href = im.download;
-        a.textContent = r.images.length > 1 ? `PNG p${i + 1}` : "Page PNG";
-        links.appendChild(a);
+        // No standalone page-PNG download: the re-rendered PNG is lower quality
+        // than the user's own source image. (The PNGs still back the preview, the
+        // searchable PDF, the hOCR pairing, and the "Download all" zip.)
       });
     }
     root.appendChild(div);

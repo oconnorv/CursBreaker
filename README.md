@@ -113,8 +113,8 @@ environment variable.
 1. **Settings** — paste your API key, pick a model, and choose a mode.
 2. **Documents** — drag in (or browse for) TIFF / JPEG / PNG / GIF / PDF files.
    Bulk import and multi-page PDFs are supported.
-3. **Transcribe** — watch progress, then download per-file `.txt` and `.hocr`,
-   the rendered page `.png`, or everything as a `.zip`.
+3. **Transcribe** — watch progress, then download a per-file searchable `.pdf`,
+   `.txt`, and `.hocr`, or everything (including the page images) as a `.zip`.
 4. **Preview boxes** — overlay the detected line boxes on the page to verify the
    localization before you trust it.
 
