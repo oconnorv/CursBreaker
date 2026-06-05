@@ -564,9 +564,10 @@ function renderEstimate(d) {
     );
   }
   points.push(
-    `<span class="muted">Token counts are exact; the dollar amount is an estimate. Input is measured `
-    + `from the first page of each file and output length varies, so treat it as a ballpark &mdash; the `
-    + `live counter shows real usage during the run.</span>`
+    `<span class="muted">Both the token counts and the cost are estimates &mdash; input is measured `
+    + `from the first page of each file (and scaled across pages), and output length is assumed and `
+    + `varies a lot by page. Treat it as a ballpark &mdash; the live counter shows the real usage `
+    + `during the run.</span>`
   );
   const lis = points.map((p) => `<li>${p}</li>`).join("");
   return `${headline}<ul class="estimate-points">${lis}</ul>`;
