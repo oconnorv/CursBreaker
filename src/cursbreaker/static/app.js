@@ -461,14 +461,12 @@ function formatTokens(n) {
   return Number(n || 0).toLocaleString();
 }
 
-// Dollar amounts can be tiny; scale precision so a sub-cent estimate isn't
-// rounded away to "$0.00".
+// Under $1, show cents to the tenth (e.g. "12.3¢") — small jobs read better in
+// cents than as "$0.123". $1 and up stays in dollars to the cent ("$1.23").
 function formatCost(usd) {
   if (usd === null || usd === undefined) return "";
   const v = Number(usd);
-  if (v === 0) return "$0.00";
-  if (v < 0.01) return "$" + v.toFixed(4);
-  if (v < 1) return "$" + v.toFixed(3);
+  if (v < 1) return (v * 100).toFixed(1) + "¢";  // ¢ = cent sign
   return "$" + v.toFixed(2);
 }
 
