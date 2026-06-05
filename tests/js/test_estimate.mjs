@@ -51,19 +51,20 @@ const { renderEstimate } = sandbox;
 check("renderEstimate is exported", typeof renderEstimate === "function");
 
 const d = {
-  billable: true, files: 2, pages: 5, calls: 10, input: 12000, output: 20000, total: 32000,
-  assumed_output_tokens_per_page: 4000, cost: 0.158, model: "gemini-3.1-pro-preview",
-  model_label: "Gemini 3.1 Pro (preview)", price_input_per_mtok: 2.0,
-  price_output_per_mtok: 12.0, prices_as_of: "2026-06-03",
+  billable: true, files: 2, pages: 48, calls: 96, input: 115776,
+  output_low: 144000, output_high: 432000, total_low: 259776, total_high: 547776,
+  per_page_low: 3000, per_page_high: 9000, cost_low: 1.96, cost_high: 5.42,
+  model: "gemini-3.1-pro-preview", model_label: "Gemini 3.1 Pro (preview)",
+  price_input_per_mtok: 2.0, price_output_per_mtok: 12.0, prices_as_of: "2026-06-03",
 };
 const h = renderEstimate(d);
 
 check("does NOT claim tokens are exact", !/are exact/i.test(h), h);
-check("says both tokens and cost are estimates", /both the token counts and the cost are estimates/i.test(h), h);
-check("output is framed as assumed", /output length is assumed/i.test(h), h);
-check("headline labels it an estimate", /estimated cost/i.test(h), h);
-check("shows the per-page output assumption", h.includes("4,000 output tokens/page"), h);
-check("shows the headline cost (cents)", h.includes("15.8¢"), h);
+check("frames both ends as estimates", /both ends are estimates/i.test(h), h);
+check("explains density drives the range", /pages with less writing cost less/i.test(h), h);
+check("headline labels it an estimated range", /estimated range/i.test(h), h);
+check("shows the cost range (dollars)", h.includes("$1.96") && h.includes("$5.42"), h);
+check("shows the per-page output range", h.includes("3,000") && h.includes("9,000"), h);
 check("links to live pricing", h.includes("ai.google.dev/gemini-api/docs/pricing"), h);
 
 const nb = renderEstimate({ billable: false, files: 3, reason: "Printed-only mode" });

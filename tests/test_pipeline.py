@@ -272,8 +272,8 @@ def test_estimate_text_mode_is_free(png_path):
     d = estimate_usage([png_path], _BillingProvider(), Settings(content_type="text"))
     assert d["calls"] == 0
     assert d["input"] == 0
-    assert d["output"] == 0
-    assert d["cost"] is None
+    assert d["output_low"] == 0 and d["output_high"] == 0
+    assert d["cost_low"] is None and d["cost_high"] is None
 
 
 def test_estimate_counts_two_calls_per_page_in_two_pass(png_path):
@@ -282,20 +282,20 @@ def test_estimate_counts_two_calls_per_page_in_two_pass(png_path):
     assert d["pages"] == 1
     assert d["calls"] == 2                 # transcribe + detect
     assert d["input"] == 500 * 1 * 2       # per-page input * pages * calls
-    # two-pass output per page = text (1600) + structured (2400)
-    assert d["output"] == 4000
-    assert d["assumed_output_tokens_per_page"] == 4000
+    # two-pass output is a per-page range: 3000 (sparse) .. 9000 (dense)
+    assert d["output_low"] == 3000 and d["output_high"] == 9000
+    assert d["per_page_low"] == 3000 and d["per_page_high"] == 9000
 
 
 def test_estimate_two_pass_output_exceeds_one_pass(png_path):
     # Two-pass generates the page's text twice (plain + structured boxes), so its
-    # output estimate must exceed one-pass for the same page.
+    # output estimate must exceed one-pass at both ends of the range.
     base = dict(content_type="handwriting")
     two = estimate_usage([png_path], _BillingProvider(), Settings(mode="two_pass", **base))
     one = estimate_usage([png_path], _BillingProvider(), Settings(mode="one_pass", **base))
-    assert one["output"] == 2400
-    assert two["output"] == 4000
-    assert two["output"] > one["output"]
+    assert (one["output_low"], one["output_high"]) == (1800, 5400)
+    assert (two["output_low"], two["output_high"]) == (3000, 9000)
+    assert two["output_high"] > one["output_high"]
 
 
 def test_estimate_scales_input_by_page_count(pdf_path):
@@ -315,7 +315,7 @@ def test_estimate_sums_across_multiple_files(png_path, tmp_path):
     assert d["files"] == 3
     assert d["pages"] == 3
     assert d["input"] == 500 * 3            # 500/page * 3 single-page files
-    assert d["output"] == 2400 * 3
+    assert d["output_low"] == 1800 * 3 and d["output_high"] == 5400 * 3
 
 
 def test_estimate_prices_automatically_from_selected_model(png_path):
@@ -326,11 +326,13 @@ def test_estimate_prices_automatically_from_selected_model(png_path):
         transcription_model="gemini-3.5-flash",  # $1.50 in / $9.00 out
     )
     d = estimate_usage([png_path], _BillingProvider(), settings)
-    # input = 500 tokens; one-pass assumed output = 2400 tokens/page (structured).
-    expected = 500 / 1_000_000 * 1.50 + 2400 / 1_000_000 * 9.00
-    assert d["cost"] == pytest.approx(expected)
-    assert d["output"] == 2400
-    assert d["assumed_output_tokens_per_page"] == 2400
+    # input = 500 tokens; one-pass output range = 1800..5400 tokens/page.
+    expected_low = 500 / 1_000_000 * 1.50 + 1800 / 1_000_000 * 9.00
+    expected_high = 500 / 1_000_000 * 1.50 + 5400 / 1_000_000 * 9.00
+    assert d["cost_low"] == pytest.approx(expected_low)
+    assert d["cost_high"] == pytest.approx(expected_high)
+    assert d["cost_high"] > d["cost_low"]
+    assert d["output_low"] == 1800 and d["output_high"] == 5400
     # The model + the rates it used are echoed back for the UI to display.
     assert d["model"] == "gemini-3.5-flash"
     assert d["price_input_per_mtok"] == 1.50
@@ -343,7 +345,7 @@ def test_estimate_no_cost_for_uncatalogued_model(png_path):
         content_type="handwriting", mode="one_pass", transcription_model="some-old-model"
     )
     d = estimate_usage([png_path], _BillingProvider(), settings)
-    assert d["cost"] is None            # unknown price -> tokens only, no dollars
+    assert d["cost_low"] is None and d["cost_high"] is None  # unknown price
     assert d["input"] == 500
 
 

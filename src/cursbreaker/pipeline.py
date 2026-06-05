@@ -63,19 +63,18 @@ class JobCancelled(Exception):
     """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
     partially-processed file is abandoned cleanly (not recorded as an error)."""
 
-# Pre-flight output-token estimate, per page. Output length is genuinely
-# unknowable until a page is read, so these are deliberately ballpark figures,
-# surfaced to the user and clearly labelled an estimate (the live counter shows
-# the real number). Calibrated to dense archival handwriting on Gemini 3.x:
-#   * the transcribe call returns plain text;
-#   * the structured call returns that text AGAIN plus per-line bounding-box
-#     coordinates + JSON, so it's larger.
-# One-pass makes one structured call; two-pass makes a text call + a structured
-# call (it effectively generates the page's text twice), which is why two-pass
-# output is much more than 2x a single flat per-call number -- the bug this
-# replaces (a flat 800/call) understated it by ~2.5x.
-_EST_TEXT_OUTPUT_PER_PAGE = 1600        # plain transcription (the transcribe call)
-_EST_STRUCTURED_OUTPUT_PER_PAGE = 2400  # text + box-coordinate JSON
+# Pre-flight output-token estimate, per page, as a LOW-HIGH range. Output is
+# genuinely unpredictable before a page is read: it scales with how much text is
+# on the page (sparse page -> little output -> cheaper; dense page -> lots ->
+# pricier), and nothing measurable up front predicts it -- real handwriting docs
+# we measured ran ~3,900-8,000 output tokens/page in two-pass at the SAME
+# input/page. So rather than a single number that's ~2x off for some documents,
+# we estimate a range that brackets the realistic spread; the UI shows it as a
+# range and explains that denser pages cost more. One-pass makes a single
+# structured call (~0.6x of two-pass, which also emits the plain text on its own
+# first call).
+_EST_OUTPUT_PER_PAGE_LOW = {"two_pass": 3000, "one_pass": 1800}
+_EST_OUTPUT_PER_PAGE_HIGH = {"two_pass": 9000, "one_pass": 5400}
 
 
 @dataclass
@@ -513,36 +512,50 @@ def estimate_usage(
                 input_tokens += file_input
 
     calls = total_pages * calls_per_page
-    # Output scales per page, by mode: one-pass = one structured call; two-pass =
-    # a plain-text call plus a structured (boxes) call.
+    # Output is a per-page RANGE (sparse vs dense pages); see the constants above.
+    mode = "one_pass" if settings.mode == "one_pass" else "two_pass"
     if calls_per_page == 0:
-        output_per_page = 0
-    elif settings.mode == "one_pass":
-        output_per_page = _EST_STRUCTURED_OUTPUT_PER_PAGE
+        per_page_low = per_page_high = 0
     else:
-        output_per_page = _EST_TEXT_OUTPUT_PER_PAGE + _EST_STRUCTURED_OUTPUT_PER_PAGE
-    output_tokens = total_pages * output_per_page
-    usage = TokenUsage(input=input_tokens, output=output_tokens, calls=calls)
+        per_page_low = _EST_OUTPUT_PER_PAGE_LOW[mode]
+        per_page_high = _EST_OUTPUT_PER_PAGE_HIGH[mode]
+    output_low = total_pages * per_page_low
+    output_high = total_pages * per_page_high
 
     # Price automatically from the selected model's published rate (no manual
     # entry). No catalog entry, or no calls -> tokens only, no dollar figure.
     pricing = pricing_for(settings.transcription_model)
+
+    def _cost(output):
+        if not (pricing and calls):
+            return None
+        return cost_for(pricing, TokenUsage(input=input_tokens, output=output, calls=calls))
+
+    cost_low = _cost(output_low)
+    cost_high = _cost(output_high)
     if pricing and calls:
-        in_rate, out_rate = effective_rates(pricing, usage)
-        cost = cost_for(pricing, usage)
+        # Tier (effective rate) is set by the per-call prompt size, identical for
+        # both ends, so either gives the rates to display.
+        in_rate, out_rate = effective_rates(
+            pricing, TokenUsage(input=input_tokens, output=output_high, calls=calls)
+        )
     else:
         in_rate = out_rate = 0.0
-        cost = None
     return {
         "files": len(paths),
         "pages": total_pages,
         "calls": calls,
         "calls_per_page": calls_per_page,
-        "input": usage.input,
-        "output": usage.output,  # assumed; see assumed_output_tokens_per_page
-        "total": usage.total,
-        "assumed_output_tokens_per_page": output_per_page,
-        "cost": cost,
+        "input": input_tokens,
+        # Output (and thus cost) is a range -- assumed, see per_page_low/high.
+        "output_low": output_low,
+        "output_high": output_high,
+        "total_low": input_tokens + output_low,
+        "total_high": input_tokens + output_high,
+        "per_page_low": per_page_low,
+        "per_page_high": per_page_high,
+        "cost_low": cost_low,
+        "cost_high": cost_high,
         "model": settings.transcription_model,
         "model_label": pricing.label if pricing else settings.transcription_model,
         "price_input_per_mtok": in_rate,

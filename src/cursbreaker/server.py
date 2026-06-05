@@ -208,10 +208,13 @@ def estimate(req: EstimateRequest):
             "reason": "Printed-only mode",
             "files": len(paths),
             "input": 0,
-            "output": 0,
-            "total": 0,
+            "output_low": 0,
+            "output_high": 0,
+            "total_low": 0,
+            "total_high": 0,
             "calls": 0,
-            "cost": None,
+            "cost_low": None,
+            "cost_high": None,
         }
 
     if not settings.resolved_api_key():
