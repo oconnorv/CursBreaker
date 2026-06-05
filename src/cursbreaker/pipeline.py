@@ -62,12 +62,19 @@ class JobCancelled(Exception):
     """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
     partially-processed file is abandoned cleanly (not recorded as an error)."""
 
-# Pre-flight estimate only: a transparent, clearly-labelled assumption for how
-# many tokens one Gemini call returns (transcription text plus a little
-# thinking). Output length is genuinely unknowable until the page is read, so
-# this is surfaced to the user rather than hidden -- the live counter shows the
-# real number during the run.
-_EST_OUTPUT_TOKENS_PER_CALL = 800
+# Pre-flight output-token estimate, per page. Output length is genuinely
+# unknowable until a page is read, so these are deliberately ballpark figures,
+# surfaced to the user and clearly labelled an estimate (the live counter shows
+# the real number). Calibrated to dense archival handwriting on Gemini 3.x:
+#   * the transcribe call returns plain text;
+#   * the structured call returns that text AGAIN plus per-line bounding-box
+#     coordinates + JSON, so it's larger.
+# One-pass makes one structured call; two-pass makes a text call + a structured
+# call (it effectively generates the page's text twice), which is why two-pass
+# output is much more than 2x a single flat per-call number -- the bug this
+# replaces (a flat 800/call) understated it by ~2.5x.
+_EST_TEXT_OUTPUT_PER_PAGE = 1600        # plain transcription (the transcribe call)
+_EST_STRUCTURED_OUTPUT_PER_PAGE = 2400  # text + box-coordinate JSON
 
 
 @dataclass
@@ -493,7 +500,15 @@ def estimate_usage(
         input_tokens += per_page_input * n_pages * calls_per_page
 
     calls = total_pages * calls_per_page
-    output_tokens = calls * _EST_OUTPUT_TOKENS_PER_CALL
+    # Output scales per page, by mode: one-pass = one structured call; two-pass =
+    # a plain-text call plus a structured (boxes) call.
+    if calls_per_page == 0:
+        output_per_page = 0
+    elif settings.mode == "one_pass":
+        output_per_page = _EST_STRUCTURED_OUTPUT_PER_PAGE
+    else:
+        output_per_page = _EST_TEXT_OUTPUT_PER_PAGE + _EST_STRUCTURED_OUTPUT_PER_PAGE
+    output_tokens = total_pages * output_per_page
     usage = TokenUsage(input=input_tokens, output=output_tokens, calls=calls)
 
     # Price automatically from the selected model's published rate (no manual
@@ -511,9 +526,9 @@ def estimate_usage(
         "calls": calls,
         "calls_per_page": calls_per_page,
         "input": usage.input,
-        "output": usage.output,  # assumed; see assumed_output_tokens_per_call
+        "output": usage.output,  # assumed; see assumed_output_tokens_per_page
         "total": usage.total,
-        "assumed_output_tokens_per_call": _EST_OUTPUT_TOKENS_PER_CALL,
+        "assumed_output_tokens_per_page": output_per_page,
         "cost": cost,
         "model": settings.transcription_model,
         "model_label": pricing.label if pricing else settings.transcription_model,

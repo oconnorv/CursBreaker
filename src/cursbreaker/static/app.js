@@ -556,7 +556,7 @@ function renderEstimate(d) {
   );
   points.push(
     `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output)}</b> output tokens`
-    + ` <span class="muted">(~${formatTokens(d.assumed_output_tokens_per_call)}/call across ${formatTokens(d.calls)} call(s))</span>`
+    + ` <span class="muted">(assuming ~${formatTokens(d.assumed_output_tokens_per_page)} output tokens/page across ${formatTokens(d.pages)} page(s))</span>`
   );
   if (hasCost) {
     points.push(

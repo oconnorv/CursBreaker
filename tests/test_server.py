@@ -516,8 +516,9 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     r = client.post("/api/estimate", json={"file_ids": [file_id]}).json()
     assert r["billable"] is True
     assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
-    # Cost is derived automatically from the selected model's published price.
-    expected = 1000 / 1_000_000 * 0.25 + 800 / 1_000_000 * 1.50
+    # Cost is derived automatically from the selected model's published price;
+    # one-pass assumes 2400 output tokens/page (structured call).
+    expected = 1000 / 1_000_000 * 0.25 + 2400 / 1_000_000 * 1.50
     assert r["cost"] == pytest.approx(expected)
     assert r["model"] == "gemini-3.1-flash-lite"
     assert r["price_input_per_mtok"] == 0.25
