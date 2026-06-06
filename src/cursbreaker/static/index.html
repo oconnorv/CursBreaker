@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=17" />
+  <link rel="stylesheet" href="/static/styles.css?v=18" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -52,6 +52,19 @@
               <button id="clear-key" class="btn small" type="button">Clear</button>
             </div>
             <p id="api_key-hint" class="hint">Stored locally on this machine; sent only to Google's Gemini API, never anywhere else.</p>
+            <details class="advanced keyhelp">
+              <summary>No API key? How to get one (it's free to start)</summary>
+              <div class="keyhelp-body">
+                <p>An API key is like a password that lets CursBreaker use Google's Gemini AI on your behalf. You create your own &mdash; it takes a couple of minutes and you need only a Google account (the same one you use for Gmail).</p>
+                <ol>
+                  <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a> and sign in with your Google account.</li>
+                  <li>Click <b>Create API key</b>. If it asks which project to use, let it make a new one &mdash; the name doesn't matter.</li>
+                  <li>Copy the key it shows you &mdash; a long string that starts with <code>AIza&hellip;</code></li>
+                  <li>Paste it into the box above and click <b>Save key</b>.</li>
+                </ol>
+                <p class="hint">Google has a free tier (no credit card required) with daily limits; heavier use needs billing. CursBreaker estimates the cost before every run. <a href="https://github.com/oconnorv/CursBreaker#get-a-gemini-api-key" target="_blank" rel="noopener noreferrer">Full step-by-step guide &amp; pricing &rarr;</a></p>
+              </div>
+            </details>
             <div id="key-info" class="key-info" role="status" aria-live="polite" hidden></div>
           </div>
 

@@ -103,10 +103,46 @@ most cases no override is needed.
 
 ## Get a Gemini API key
 
-Create a key at **Google AI Studio** (<https://aistudio.google.com/apikey>).
-Paste it into CursBreaker's **Settings → Gemini API key** (stored locally on
-your machine with owner-only permissions), or set the `GEMINI_API_KEY`
-environment variable.
+**New to this? Don't worry.** CursBreaker uses Google's Gemini AI to read
+handwriting, and Google needs to know the requests are coming from you. An
+**API key** is how you do that: think of it as a long password that lets
+CursBreaker use Gemini on your behalf. You create it once, paste it into
+CursBreaker, and you're set. You bring your **own** key — CursBreaker never
+ships or borrows anyone else's.
+
+You'll need a Google account (the same kind you use for Gmail). Then:
+
+1. Go to **Google AI Studio**: <https://aistudio.google.com/apikey>
+2. **Sign in** with your Google account if you're prompted.
+3. Click **Create API key**. (If you don't see that button, click **Get API
+   key** in the left-hand menu first.) If Google asks which project to use, let
+   it **create a new one** for you — the name doesn't matter.
+4. Google shows you the key — a long string of letters and numbers that starts
+   with `AIza…`. Click to **copy** it.
+5. Back in CursBreaker, open **Settings**, paste the key into the **Gemini API
+   key** box, and click **Save key**. That's it.
+
+Your key is stored locally on your own computer (with owner-only file
+permissions) and is sent only to Google's Gemini API when you transcribe —
+never to us or anyone else. You can remove it at any time with the **Clear**
+button. (Prefer not to paste it into the app? Set the `GEMINI_API_KEY`
+environment variable before launching instead.)
+
+### Does it cost money?
+
+Google offers a **free tier** you can start with — **no credit card required** —
+so you can try CursBreaker without paying anything; the free tier just has daily
+limits. For larger jobs you can turn on paid usage (billing) in your Google
+account, and Google then charges based on how much text the model reads and
+writes. CursBreaker helps you stay in control: it shows an **estimated cost
+before every run** and the **actual usage afterward**, and the model dropdown
+lists each model's published price. See Google's current rates at
+<https://ai.google.dev/gemini-api/docs/pricing> — those come straight from
+Google and can change, so the in-app figures are estimates, not a guarantee.
+
+> **Keep your key private.** Treat it like a password: anyone who has it can run
+> up usage on your account. Don't paste it into emails, chats, or screenshots.
+> If a key is ever exposed, delete it in Google AI Studio and create a new one.
 
 ## Using it
 
