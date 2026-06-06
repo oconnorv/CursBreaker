@@ -182,6 +182,14 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .advanced { margin-top: 8px; }
 .advanced summary { cursor: pointer; color: var(--link); font-size: 14px; }
 
+/* "How to get an API key" inline help (collapsed by default, no clutter). */
+.keyhelp-body { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.55; }
+.keyhelp-body p { margin: 8px 0; }
+.keyhelp-body ol { margin: 8px 0; padding-left: 22px; }
+.keyhelp-body li { margin: 5px 0; }
+.keyhelp-body a { color: var(--link); }
+.keyhelp-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
 .btn {
   border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text);
   padding: 10px 16px; border-radius: 10px; font-size: 14px; cursor: pointer;

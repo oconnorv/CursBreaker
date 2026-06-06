@@ -168,6 +168,16 @@ def test_index_credits_mark_humphries_and_authorship():
     assert "Charlotte Mecklenburg Library" in html
 
 
+def test_index_explains_how_to_get_an_api_key():
+    # Non-technical users (GLAM staff) need an in-app pointer to creating a key,
+    # not just an empty field. The collapsed help links to AI Studio, names the
+    # create step, and reassures that there's a free tier.
+    html = client.get("/").text
+    assert "aistudio.google.com" in html
+    assert "Create API key" in html
+    assert "free" in html.lower()
+
+
 def test_favicon_route_never_500s():
     # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
     r = client.get("/favicon.ico")
