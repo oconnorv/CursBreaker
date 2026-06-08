@@ -60,6 +60,12 @@ def test_process_image_writes_outputs(png_path, tmp_path, mode):
     assert (out / "sample.pdf").exists()
     assert result.pdf_name == "sample.pdf"
 
+    # ALTO XML is written too, parses, and carries one TextLine per line.
+    assert result.alto_name == "sample.alto.xml"
+    alto_root = etree.fromstring((out / "sample.alto.xml").read_bytes())
+    ans = {"a": "http://www.loc.gov/standards/alto/ns-v4#"}
+    assert len(alto_root.xpath("//a:TextLine", namespaces=ans)) == 4
+
 
 def test_process_pdf_multipage(pdf_path, tmp_path):
     out = tmp_path / "out"

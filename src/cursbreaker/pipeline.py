@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from .align import align_lines, align_words
+from .alto import build_alto
 from .config import Settings
 from .gemini_client import TranscriptionProvider
 from .hocr import build_hocr, normalized_to_pixel
@@ -84,6 +85,7 @@ class FileResult:
     n_lines: int = 0
     txt_name: str | None = None
     hocr_name: str | None = None
+    alto_name: str | None = None
     pdf_name: str | None = None
     image_names: list[str] = field(default_factory=list)
     error: str | None = None
@@ -327,10 +329,11 @@ def process_file(
         # Close the lazy renderer (releases the open PDF) if we bailed early.
         pages.close()
 
-    report("Writing outputs (text, hOCR, searchable PDF)…", stage="write")
+    report("Writing outputs (text, hOCR, ALTO, searchable PDF)…", stage="write")
     stem = path.stem
     txt_name = f"{stem}.txt"
     hocr_name = f"{stem}.hocr"
+    alto_name = f"{stem}.alto.xml"
     pdf_name = f"{stem}.pdf"
 
     txt = "\n\n".join(p.plain_text.strip() for p in page_results)
@@ -343,12 +346,19 @@ def process_file(
         mode_label = f"{content}/{settings.mode}"
         if settings.refine_word_boxes:
             mode_label += "+wordboxes"
+    ocr_system = f"CursBreaker ({mode_label})"
+
     hocr_bytes = build_hocr(
-        page_results,
-        ocr_system=f"CursBreaker ({mode_label})",
-        language=settings.language,
+        page_results, ocr_system=ocr_system, language=settings.language
     )
     (out_dir / hocr_name).write_bytes(hocr_bytes)
+
+    # ALTO XML carries the same line/word geometry as hOCR in the Library of
+    # Congress's preservation format, for ALTO/METS-based repositories.
+    alto_bytes = build_alto(
+        page_results, ocr_system=ocr_system, language=settings.language
+    )
+    (out_dir / alto_name).write_bytes(alto_bytes)
 
     pdf_bytes = build_searchable_pdf(
         page_results, [out_dir / n for n in image_names]
@@ -364,6 +374,7 @@ def process_file(
         n_lines=n_lines,
         txt_name=txt_name,
         hocr_name=hocr_name,
+        alto_name=alto_name,
         pdf_name=pdf_name,
         image_names=image_names,
         token_usage=_provider_usage(provider) - usage_before,

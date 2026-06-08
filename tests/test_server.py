@@ -1,4 +1,6 @@
+import io
 import time
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,9 +130,17 @@ def test_full_flow(run_with_mock, png_path):
     assert pdf.status_code == 200
     assert pdf.content[:4] == b"%PDF"
 
+    # ALTO XML download
+    assert result["alto"], "ALTO URL missing from job result"
+    alto = client.get(result["alto"])
+    assert alto.status_code == 200
+    assert b"<alto" in alto.content and b"ns-v4" in alto.content
+
     zipped = client.get(f"/api/download/{started['job_id']}.zip")
     assert zipped.status_code == 200
     assert zipped.content[:2] == b"PK"
+    names = zipfile.ZipFile(io.BytesIO(zipped.content)).namelist()
+    assert "sample.alto.xml" in names and "sample.hocr" in names
 
 
 def test_upload_rejects_unsupported_types(tmp_path):

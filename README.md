@@ -4,12 +4,14 @@
 
 CursBreaker is a small, local desktop application (it runs in your browser) that
 sends document images to **Google Gemini** for high-accuracy handwriting
-transcription, then produces two things for each page:
+transcription, then produces, for each page:
 
-1. a plain-text transcription (`.txt`), and
+1. a plain-text transcription (`.txt`);
 2. a valid **hOCR** file (`.hocr`) that pairs the transcribed words with their
    pixel locations on the image — making the page keyword-searchable and
-   findable, the same way Tesseract or ABBYY output works for printed text.
+   findable, the same way Tesseract or ABBYY output works for printed text; and
+3. an **ALTO XML** file (`.alto.xml`) — the same word geometry in the Library of
+   Congress's preservation format, for ALTO/METS-based repositories.
 
 You bring your **own** Gemini API key; CursBreaker never ships or phones home
 with anyone else's.
@@ -23,7 +25,7 @@ Recognition*](https://generativehistory.substack.com/p/gemini-3-solves-handwriti
 showed that Gemini can transcribe historical cursive at near-human accuracy.
 But a transcript alone can't tell you *where* a word is on the page. CursBreaker
 adds that missing half: it asks Gemini for **line bounding boxes** alongside the
-text and converts everything into standards-compliant hOCR.
+text and converts everything into standards-compliant hOCR and ALTO XML.
 
 ### How localization works
 
@@ -150,7 +152,8 @@ Google and can change, so the in-app figures are estimates, not a guarantee.
 2. **Documents** — drag in (or browse for) TIFF / JPEG / PNG / GIF / PDF files.
    Bulk import and multi-page PDFs are supported.
 3. **Transcribe** — watch progress, then download a per-file searchable `.pdf`,
-   `.txt`, and `.hocr`, or everything (including the page images) as a `.zip`.
+   `.txt`, `.hocr`, and `.alto.xml`, or everything (including the page images) as
+   a `.zip`.
 4. **Preview boxes** — overlay the detected line boxes on the page to verify the
    localization before you trust it.
 
@@ -181,7 +184,7 @@ Google and can change, so the in-app figures are estimates, not a guarantee.
 - **Media resolution:** `high`
 - **Preprocessing:** gentle orientation/denoise/brightness (toggleable).
 
-## Turning hOCR into a searchable PDF
+## Using the coordinate output (hOCR / ALTO)
 
 The `.hocr` + page `.png` pair is consumable by standard tooling. For example,
 with [`hocr-tools`](https://github.com/ocropus/hocr-tools):
@@ -190,8 +193,12 @@ with [`hocr-tools`](https://github.com/ocropus/hocr-tools):
 hocr-pdf /path/to/output_folder > searchable.pdf
 ```
 
-Many viewers, indexers and digital-library platforms (e.g. IIIF text-layer
-workflows) also ingest hOCR directly.
+(CursBreaker already writes a searchable `.pdf` for you; this is just one example
+of what the coordinate layer enables.)
+
+Many viewers, indexers and digital-library platforms ingest these coordinate
+formats directly: **hOCR** for IIIF text-layer workflows (e.g. Islandora/Mirador
+search-result highlighting), and **ALTO XML** for ALTO/METS-based repositories.
 
 ## Notes & limitations
 

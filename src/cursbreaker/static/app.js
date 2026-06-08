@@ -413,7 +413,8 @@ function renderResults(jobId, job) {
       html += `<div class="links">
         ${pdfLink}
         <a class="btn small" href="${r.txt}">Download .txt</a>
-        <a class="btn small" href="${r.hocr}">Download .hocr</a></div>`;
+        <a class="btn small" href="${r.hocr}">Download .hocr</a>
+        <a class="btn small" href="${r.alto}">Download ALTO (.xml)</a></div>`;
       div.innerHTML = html;
       const links = div.querySelector(".links");
       r.images.forEach((im, i) => {
