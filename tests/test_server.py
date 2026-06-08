@@ -188,6 +188,23 @@ def test_index_explains_how_to_get_an_api_key():
     assert "free" in html.lower()
 
 
+def test_index_has_global_live_region_announcer():
+    # A single always-present polite live region carries transient status
+    # (key saved/cleared, estimate ready, job done) to screen readers reliably.
+    html = client.get("/").text
+    assert 'id="a11y-status" class="sr-only" role="status" aria-live="polite"' in html
+
+
+def test_app_js_routes_status_through_announcer():
+    # Guard the wiring so the live region isn't an unused empty element: the
+    # announce() helper exists, targets #a11y-status, and a rejected key flags
+    # the field for assistive tech.
+    js = client.get("/static/app.js").text
+    assert "function announce(" in js
+    assert "a11y-status" in js
+    assert 'setAttribute("aria-invalid"' in js
+
+
 def test_favicon_route_never_500s():
     # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
     r = client.get("/favicon.ico")

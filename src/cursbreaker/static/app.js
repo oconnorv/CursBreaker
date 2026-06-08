@@ -5,6 +5,20 @@ let staged = [];      // [{id, name, pages}]
 let pollTimer = null;
 let activeJobId = null;  // the running job, for the Cancel button
 
+// Single always-present live region: route transient status (key saved/cleared,
+// estimate ready, job done/failed, errors) through here so screen-reader users
+// hear the outcome reliably, even when a per-section box toggles `hidden`.
+let _announceTimer = null;
+function announce(msg) {
+  const el = $("a11y-status");
+  if (!el) return;
+  // Clear, then set after a tick, so repeating an identical message still
+  // re-announces (a live region set to the same text is ignored).
+  el.textContent = "";
+  clearTimeout(_announceTimer);
+  _announceTimer = setTimeout(() => { el.textContent = msg; }, 60);
+}
+
 async function api(method, url, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -67,19 +81,26 @@ function applyKeyStatus(data) {
 // generation tokens/quota, so a revoked/expired key is caught here in Settings
 // instead of failing mid-transcription. Only "valid"/"invalid" change the
 // badge; "unknown" (offline/transient) and "no_key" leave it untouched.
-async function verifyKey() {
+async function verifyKey(announceValid = false) {
   let data;
   try { data = await api("GET", "/api/key-status"); }
   catch (e) { return; } // our own server unreachable — leave the local badge
   const badge = $("key-status");
   const info = $("key-info");
+  const key = $("api_key");
   if (data.state === "valid") {
     badge.textContent = "Key valid"; badge.className = "badge ok";
+    if (key) key.removeAttribute("aria-invalid");
+    if (announceValid) announce("API key verified and working.");
   } else if (data.state === "invalid") {
     badge.textContent = "Key rejected"; badge.className = "badge warn";
     info.className = "key-info warn";
     info.innerHTML =
       `<span class="glyph" aria-hidden="true">!</span><span>${escapeHtml(data.message)} Transcription will fail until you paste a current key.</span>`;
+    // Flag the field for assistive tech and announce the rejection (this also
+    // fires on load for a bad stored key, which the user needs to know).
+    if (key) key.setAttribute("aria-invalid", "true");
+    announce("API key rejected. " + data.message);
   }
 }
 
@@ -136,6 +157,7 @@ async function loadTesseractStatus() {
       }
       info.innerHTML =
         `<span class="glyph" aria-hidden="true">!</span><span>${detail} Printed-only mode and word-box refinement need it; Handwriting mode still works as usual.</span>`;
+      announce("Tesseract OCR engine not detected. Printed-only mode and word-box refinement are unavailable; handwriting mode still works.");
     }
   }
   // Populate the language datalist with whatever's actually installed.
@@ -366,12 +388,20 @@ function pollJob(jobId) {
       $("transcribe").disabled = false;
       $("estimate").disabled = staged.length === 0;
       // Show whatever finished — completed files remain downloadable on cancel.
+      if (job.status === "done") {
+        announce(`Transcription complete — ${(job.results || []).length} file(s) ready to download.`);
+      } else if (job.status === "cancelled") {
+        announce(`Transcription cancelled — ${(job.results || []).length} file(s) completed.`);
+      } else if (job.status === "error") {
+        announce("Transcription failed: " + (job.error || "unknown error"));
+      }
       if ((job.status === "done" || job.status === "cancelled") && (job.results || []).length) {
         renderResults(jobId, job);
         if (job.status === "done") {
-          // Send keyboard/screen-reader focus to the freshly-rendered results.
+          // Send keyboard/screen-reader focus to the freshly-rendered results,
+          // centring it so it's actually in view (not just focused off-screen).
           const h = $("results-heading");
-          if (h) h.focus();
+          if (h) { h.scrollIntoView({ block: "center" }); h.focus(); }
         }
       }
     }
@@ -440,9 +470,10 @@ let lastFocused = null;
 function openPreview(url, title) {
   const dlg = $("modal");
   const img = $("modal-img");
+  const label = title || "Image preview";  // never leave the dialog unlabelled
   img.src = url;
-  img.alt = title;                 // descriptive alt for this specific preview
-  $("modal-title").textContent = title;
+  img.alt = label;                 // descriptive alt for this specific preview
+  $("modal-title").textContent = label;
   lastFocused = document.activeElement;  // so we can restore focus on close
   if (typeof dlg.showModal === "function" && !dlg.open) dlg.showModal();
   else dlg.setAttribute("open", "");     // fallback for very old browsers
@@ -524,10 +555,12 @@ async function estimateCost() {
     const data = await api("POST", "/api/estimate", { file_ids: staged.map((f) => f.id) });
     box.className = "key-info estimate-info";
     box.innerHTML = renderEstimate(data);
+    announce(estimateSummary(data));
   } catch (e) {
     box.className = "key-info estimate-info warn";
     box.innerHTML =
       `<div class="estimate-line"><span class="glyph" aria-hidden="true">!</span><span>Couldn't estimate: ${escapeHtml(e.message)}</span></div>`;
+    announce("Couldn't estimate cost: " + e.message);
   } finally {
     $("estimate").disabled = staged.length === 0;
   }
@@ -572,6 +605,19 @@ function renderEstimate(d) {
   return `${headline}<ul class="estimate-points">${lis}</ul>`;
 }
 
+// Plain-text version of the estimate headline, for the screen-reader announcer.
+function estimateSummary(d) {
+  if (d.billable === false) {
+    return `No Gemini API cost for these ${d.files} file(s): ${d.reason}.`;
+  }
+  if (d.cost_low !== null && d.cost_low !== undefined) {
+    return `Estimated cost ${formatCost(d.cost_low)} to ${formatCost(d.cost_high)} `
+      + `for ${formatTokens(d.pages)} page(s).`;
+  }
+  return `Estimated ${formatTokens(d.total_low)} to ${formatTokens(d.total_high)} tokens `
+    + `for ${formatTokens(d.pages)} page(s).`;
+}
+
 // ---- misc --------------------------------------------------------------- //
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
@@ -579,18 +625,26 @@ function escapeHtml(s) {
 }
 
 function wire() {
-  $("save-key").onclick = () => saveSettings({ api_key: $("api_key").value }).then(() => {
-    $("api_key").value = "";
-    // A freshly-saved key invalidates any prior "no API key" transcription
-    // error, so clear that stale message immediately.
-    $("action-note").textContent = stagedStatus();
-    verifyKey(); // confirm the just-pasted key actually works (free check)
-  });
+  $("save-key").onclick = () => {
+    const hadKey = $("api_key").value.trim() !== "";
+    saveSettings({ api_key: $("api_key").value }).then(() => {
+      $("api_key").value = "";
+      // A freshly-saved key invalidates any prior "no API key" transcription
+      // error, so clear that stale message immediately.
+      $("action-note").textContent = stagedStatus();
+      if (hadKey) {
+        announce("Gemini API key saved.");
+        verifyKey(true); // confirm the just-pasted key works, and announce it
+      }
+    });
+  };
   $("clear-key").onclick = async () => {
     if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;
     await api("DELETE", "/api/settings/api_key");
     $("api_key").value = "";
+    $("api_key").removeAttribute("aria-invalid");
     await loadSettings();
+    announce("Gemini API key cleared.");
   };
   for (const id of [...TEXT, ...NUMERIC]) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const id of BOOL) $(id).addEventListener("change", () => saveSettings(gatherSettings()));

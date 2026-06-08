@@ -259,7 +259,9 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 
 .actions { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
-.progress { height: 12px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+/* Track darker than the card + a strong hairline so the bar's fill clears the
+   3:1 non-text contrast bar against its groove (1.4.11) in both themes. */
+.progress { height: 12px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 999px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s; }
 
 /* Append-only, scrollable activity log under the progress bar. Newest line in
