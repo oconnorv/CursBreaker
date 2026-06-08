@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=18" />
+  <link rel="stylesheet" href="/static/styles.css?v=19" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -13,6 +13,11 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
+
+  <!-- Single global live region: transient status (key saved/cleared, estimate
+       ready, job done/failed, errors) is routed here so screen readers hear the
+       outcome reliably, even when a per-section message box toggles `hidden`. -->
+  <p id="a11y-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
 
   <header class="topbar">
     <div class="brand">
@@ -186,6 +191,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=20"></script>
+  <script src="/static/app.js?v=22"></script>
 </body>
 </html>

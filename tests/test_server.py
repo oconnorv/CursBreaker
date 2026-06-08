@@ -1,4 +1,6 @@
+import io
 import time
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,9 +130,17 @@ def test_full_flow(run_with_mock, png_path):
     assert pdf.status_code == 200
     assert pdf.content[:4] == b"%PDF"
 
+    # ALTO XML download
+    assert result["alto"], "ALTO URL missing from job result"
+    alto = client.get(result["alto"])
+    assert alto.status_code == 200
+    assert b"<alto" in alto.content and b"ns-v4" in alto.content
+
     zipped = client.get(f"/api/download/{started['job_id']}.zip")
     assert zipped.status_code == 200
     assert zipped.content[:2] == b"PK"
+    names = zipfile.ZipFile(io.BytesIO(zipped.content)).namelist()
+    assert "sample.alto.xml" in names and "sample.hocr" in names
 
 
 def test_upload_rejects_unsupported_types(tmp_path):
@@ -176,6 +186,23 @@ def test_index_explains_how_to_get_an_api_key():
     assert "aistudio.google.com" in html
     assert "Create API key" in html
     assert "free" in html.lower()
+
+
+def test_index_has_global_live_region_announcer():
+    # A single always-present polite live region carries transient status
+    # (key saved/cleared, estimate ready, job done) to screen readers reliably.
+    html = client.get("/").text
+    assert 'id="a11y-status" class="sr-only" role="status" aria-live="polite"' in html
+
+
+def test_app_js_routes_status_through_announcer():
+    # Guard the wiring so the live region isn't an unused empty element: the
+    # announce() helper exists, targets #a11y-status, and a rejected key flags
+    # the field for assistive tech.
+    js = client.get("/static/app.js").text
+    assert "function announce(" in js
+    assert "a11y-status" in js
+    assert 'setAttribute("aria-invalid"' in js
 
 
 def test_favicon_route_never_500s():
