@@ -205,6 +205,13 @@ def test_app_js_routes_status_through_announcer():
     assert 'setAttribute("aria-invalid"' in js
 
 
+def test_staged_list_keeps_list_semantics():
+    # list-style:none strips the implicit list role in Safari/VoiceOver, so the
+    # staged-files list carries an explicit role="list" to stay announced.
+    html = client.get("/").text
+    assert '<ul id="staged" class="staged" role="list"' in html
+
+
 def test_favicon_route_never_500s():
     # 200 when a favicon file is present; 204 when it isn't — never a 404/500.
     r = client.get("/favicon.ico")

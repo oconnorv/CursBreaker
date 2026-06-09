@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=19" />
+  <link rel="stylesheet" href="/static/styles.css?v=20" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -131,7 +131,9 @@
         <button class="btn" id="browse" type="button">Browse files</button>
         <input type="file" id="file-input" multiple accept=".tif,.tiff,.jpg,.jpeg,.png,.gif,.pdf" hidden />
       </div>
-      <ul id="staged" class="staged" aria-label="Files ready to transcribe"></ul>
+      <!-- role="list" is explicit: list-style:none drops the implicit list
+           role in Safari/VoiceOver, which would otherwise stop announcing it. -->
+      <ul id="staged" class="staged" role="list" aria-label="Files ready to transcribe"></ul>
       <div class="actions">
         <button id="transcribe" class="btn primary" type="button" disabled>Transcribe</button>
         <button id="estimate" class="btn" type="button" disabled>Estimate cost</button>
