@@ -165,7 +165,7 @@ main {
 .field { display: block; margin: 10px 0; }
 .field > span, .field > label, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
-.hint { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+.hint { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 
 input[type=text], input[type=password], input[type=number], select, input:not([type]) {
   width: 100%; padding: 10px 12px; border-radius: 10px;
@@ -188,7 +188,7 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .keyhelp-body ol { margin: 8px 0; padding-left: 22px; }
 .keyhelp-body li { margin: 5px 0; }
 .keyhelp-body a { color: var(--link); }
-.keyhelp-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.keyhelp-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 
 .btn {
   border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text);
@@ -204,7 +204,7 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 #cancel-job:hover { border-color: var(--err-ink); color: var(--err-ink); }
 #cancel-job:disabled { opacity: .6; cursor: default; }
 
-.badge { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); color: var(--text); }
+.badge { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); color: var(--text); }
 .badge.ok { background: rgba(37,194,129,.16); color: var(--ok-ink); }
 .badge.warn { background: rgba(255,107,107,.16); color: var(--err-ink); }
 
@@ -271,7 +271,7 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
   max-height: 220px; overflow-y: auto;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px; line-height: 1.55; color: var(--muted);
+  font-size: 13px; line-height: 1.55; color: var(--muted);
 }
 .activity-log:empty { display: none; }
 .activity-log li { padding: 1px 0; }
@@ -287,7 +287,7 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .result h3 { margin: 0 0 4px; font-size: 15px; }
 .result .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .result .err { color: var(--err-ink); }
-.pill { font-size: 12.5px; color: var(--muted); }
+.pill { font-size: 13px; color: var(--muted); }
 
 .credits { max-width: 880px; margin: 8px auto 0; padding: 24px 20px 36px;
   text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
