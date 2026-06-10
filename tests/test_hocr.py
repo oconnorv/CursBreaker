@@ -4,7 +4,10 @@ from cursbreaker.hocr import (
     XHTML_NS,
     build_hocr,
     normalized_to_pixel,
+    sanitize_word_boxes,
     split_line_into_words,
+    word_boxes_for_line,
+    word_boxes_sane,
 )
 from cursbreaker.models import OcrWord, PageResult, PixelBox, TranscribedLine
 
@@ -182,3 +185,77 @@ def test_build_hocr_emits_language_and_baseline_and_per_line_confidence():
     ]
     assert all("x_wconf 95" in t for t in confs_line1)
     assert all("x_wconf 60" in t for t in confs_line2)
+
+
+# --- A0: word-box sanitization + sane-or-synthesize fallback -------------- #
+def test_sanitize_grows_degenerate_into_gap():
+    line = PixelBox(x0=0, y0=0, x1=200, y1=20)
+    boxes = [
+        PixelBox(x0=0, y0=0, x1=50, y1=20),
+        PixelBox(x0=90, y0=0, x1=91, y1=20),    # 1px sliver, with a gap on each side
+        PixelBox(x0=150, y0=0, x1=200, y1=20),
+    ]
+    out = sanitize_word_boxes(boxes, line)
+    assert all(b.width() >= 2 for b in out)
+    assert out[0].x1 <= out[1].x0 and out[1].x1 <= out[2].x0  # still ordered, no overlap
+
+
+def test_sanitize_clips_overlap():
+    line = PixelBox(x0=0, y0=0, x1=200, y1=20)
+    boxes = [PixelBox(x0=0, y0=0, x1=120, y1=20), PixelBox(x0=80, y0=0, x1=200, y1=20)]
+    out = sanitize_word_boxes(boxes, line)
+    assert out[0].x1 <= out[1].x0  # the 80..120 overlap is clipped away
+
+
+def test_sanitize_leaves_clean_boxes_unchanged():
+    line = PixelBox(x0=10, y0=10, x1=350, y1=40)
+    boxes = [PixelBox(x0=10, y0=10, x1=100, y1=40), PixelBox(x0=200, y0=10, x1=350, y1=40)]
+    assert sanitize_word_boxes(boxes, line) == boxes
+
+
+def test_word_boxes_sane_flags_degenerate_and_nested():
+    line = PixelBox(x0=0, y0=0, x1=200, y1=20)
+    good = [PixelBox(x0=0, y0=0, x1=80, y1=20), PixelBox(x0=100, y0=0, x1=200, y1=20)]
+    degenerate = [PixelBox(x0=0, y0=0, x1=1, y1=20), PixelBox(x0=100, y0=0, x1=200, y1=20)]
+    nested = [PixelBox(x0=0, y0=0, x1=200, y1=20), PixelBox(x0=50, y0=0, x1=120, y1=20)]
+    assert word_boxes_sane(good, line)
+    assert not word_boxes_sane(degenerate, line)
+    assert not word_boxes_sane(nested, line)
+
+
+def test_word_boxes_for_line_uses_clean_real_boxes_verbatim():
+    words = [
+        OcrWord(text="hi", box=PixelBox(x0=10, y0=10, x1=60, y1=40), confidence=90),
+        OcrWord(text="there", box=PixelBox(x0=80, y0=10, x1=200, y1=40), confidence=88),
+    ]
+    line = TranscribedLine(text="hi there", box=PixelBox(x0=10, y0=10, x1=200, y1=40), words=words)
+    got = word_boxes_for_line(line)
+    assert [t for t, _, _ in got] == ["hi", "there"]
+    assert [b for _, b, _ in got] == [w.box for w in words]  # used as-is
+
+
+def test_word_boxes_for_line_rejects_garbage_and_synthesizes():
+    # Nested + degenerate "real" boxes (the funeral-ALTO failure mode) are dropped
+    # in favour of the clean proportional split; the TEXT is always preserved.
+    words = [
+        OcrWord(text="cause", box=PixelBox(x0=0, y0=0, x1=200, y1=20), confidence=90),
+        OcrWord(text="of", box=PixelBox(x0=40, y0=0, x1=80, y1=20), confidence=90),
+        OcrWord(text="death", box=PixelBox(x0=199, y0=0, x1=200, y1=20), confidence=90),
+    ]
+    line = TranscribedLine(text="cause of death", box=PixelBox(x0=0, y0=0, x1=200, y1=20), words=words)
+    got = word_boxes_for_line(line)
+    assert [t for t, _, _ in got] == ["cause", "of", "death"]
+    boxes = [b for _, b, _ in got]
+    assert word_boxes_sane(boxes, line.box)            # the fallback is clean
+    assert boxes != [w.box for w in words]             # not the garbage input
+
+
+def test_build_hocr_falls_back_when_word_boxes_are_garbage():
+    words = [
+        OcrWord(text="a", box=PixelBox(x0=0, y0=0, x1=300, y1=20), confidence=90),
+        OcrWord(text="b", box=PixelBox(x0=1, y0=0, x1=2, y1=20), confidence=90),  # 1px
+    ]
+    line = TranscribedLine(text="a b", box=PixelBox(x0=0, y0=0, x1=300, y1=20), words=words)
+    root = etree.fromstring(build_hocr([_page([line])]))
+    titles = [w.get("title") for w in root.xpath("//x:span[@class='ocrx_word']", namespaces=NS)]
+    assert len(titles) == 2 and "bbox 1 0 2 20" not in titles[1]  # the 1px box was not emitted
