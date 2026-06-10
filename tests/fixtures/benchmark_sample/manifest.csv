@@ -1,0 +1,4 @@
+id,image,type,subtype,era,difficulty,mode,source
+letter01,images/letter01.png,letter,handwritten,1900-49,medium,sequential,fixture
+map01,images/map01.png,map,printed,1900-49,n/a,spotting,fixture
+ceil01,images/ceil01.png,letter,handwritten,1900-49,ceiling,sequential,fixture
