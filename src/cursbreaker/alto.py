@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from lxml import etree
 
-from .hocr import split_line_into_words
+from .hocr import word_boxes_for_line
 from .models import PageResult, PixelBox, TranscribedLine
 
 ALTO_NS = "http://www.loc.gov/standards/alto/ns-v4#"
@@ -133,16 +133,9 @@ def _build_page(layout, page: PageResult, pi: int) -> None:
     )
     for li, line in enumerate(page.lines, start=1):
         line_el = _sub(block, "TextLine", ID=f"line_{pi}_{li}", **_geom(line.box))
-        # Prefer real per-word data (e.g. Tesseract) when the line carries it;
-        # otherwise fall back to proportionally splitting the line box, the only
-        # option for Gemini-sourced lines.
-        if line.words:
-            word_iter = [(w.text, w.box, w.confidence) for w in line.words]
-        else:
-            word_iter = [
-                (text, wbox, line.confidence)
-                for text, wbox in split_line_into_words(line.text, line.box)
-            ]
+        # Real engine boxes when usable; otherwise (or when those boxes fail the
+        # sanity check) the sanitized proportional split.
+        word_iter = word_boxes_for_line(line)
         for wi, (word_text, wbox, wconf) in enumerate(word_iter, start=1):
             if wi > 1:
                 # ALTO marks inter-word whitespace with an explicit <SP/>.

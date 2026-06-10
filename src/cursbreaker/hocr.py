@@ -70,7 +70,72 @@ def split_line_into_words(text: str, box: PixelBox) -> list[tuple[str, PixelBox]
             wx1 = wx0 + 1
         out.append((word, PixelBox(x0=wx0, y0=box.y0, x1=wx1, y1=box.y1)))
         cursor = end + 1  # skip the separating space
-    return out
+    boxes = sanitize_word_boxes([b for _, b in out], box)
+    return [(word, b) for (word, _), b in zip(out, boxes)]
+
+
+def sanitize_word_boxes(
+    boxes: list[PixelBox], line_box: PixelBox, *, min_width: int = 2
+) -> list[PixelBox]:
+    """Clean per-word boxes in reading order: clip any overlap between adjacent
+    boxes at their shared midpoint, then grow degenerate (sub-``min_width``)
+    boxes into the surrounding gap. Length- and order-preserving. Synthesized
+    boxes carry inter-word gaps to grow into, so a word whose proportional slice
+    rounded to nothing becomes a real box instead of a 1px sliver."""
+    if not boxes:
+        return list(boxes)
+    xs = [[b.x0, b.y0, b.x1, b.y1] for b in boxes]
+    lo = min([line_box.x0, *(b[0] for b in xs)])   # widen to any legit overhang
+    hi = max([line_box.x1, *(b[2] for b in xs)])
+    for i in range(len(xs) - 1):
+        a, b = xs[i], xs[i + 1]
+        if b[0] < a[2]:                            # clip the overlap at the midpoint
+            mid = (b[0] + a[2]) // 2
+            a[2] = b[0] = mid
+    for i, box in enumerate(xs):
+        if box[2] - box[0] >= min_width:
+            continue
+        right = xs[i + 1][0] if i + 1 < len(xs) else hi
+        left = xs[i - 1][2] if i - 1 >= 0 else lo
+        box[2] = min(max(box[2], box[0] + min_width), right)
+        if box[2] - box[0] < min_width:
+            box[0] = max(min(box[0], box[2] - min_width), left)
+        if box[2] <= box[0]:                       # truly no room -> at least 1px
+            box[2] = box[0] + 1
+    return [PixelBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3]) for b in xs]
+
+
+def word_boxes_sane(
+    boxes: list[PixelBox], line_box: PixelBox, *, min_width: int = 2, max_overlap: float = 0.5
+) -> bool:
+    """True when a line's per-word boxes are usable: none degenerate, and no pair
+    overlapping more than ``max_overlap`` of the smaller box. Shaky word detection
+    (e.g. Tesseract on a hard hand) can return nested or zero-width boxes; when it
+    does, the builders fall back to the clean proportional split instead."""
+    if not boxes:
+        return True
+    if any(b.width() < min_width or b.height() < min_width for b in boxes):
+        return False
+    for a, b in zip(boxes, boxes[1:]):
+        ix = max(0, min(a.x1, b.x1) - max(a.x0, b.x0))
+        iy = max(0, min(a.y1, b.y1) - max(a.y0, b.y0))
+        smaller = min(a.width() * a.height(), b.width() * b.height())
+        if smaller and (ix * iy) / smaller > max_overlap:
+            return False
+    return True
+
+
+def word_boxes_for_line(line: TranscribedLine) -> list[tuple[str, PixelBox, int]]:
+    """Per-word ``(text, box, confidence)`` for a line. Uses real engine boxes
+    when the line carries usable ones; otherwise -- or when those boxes fail the
+    sanity check -- falls back to the sanitized proportional split, so a line
+    never emits word geometry worse than the synthesized boxes."""
+    if line.words and word_boxes_sane([w.box for w in line.words], line.box):
+        return [(w.text, w.box, w.confidence) for w in line.words]
+    return [
+        (text, wbox, line.confidence)
+        for text, wbox in split_line_into_words(line.text, line.box)
+    ]
 
 
 def _bbox(b: PixelBox) -> str:
@@ -166,18 +231,9 @@ def _build_page(body, page: PageResult, pi: int, *, language: str) -> None:
                 "title": f"{_bbox(line.box)}; baseline 0 -{descender}; lang {language}",
             },
         )
-        # Prefer real per-word data (e.g. Tesseract) when the line carries it;
-        # otherwise fall back to proportionally splitting the line box, which
-        # is the only option for Gemini-sourced lines.
-        if line.words:
-            word_iter = [
-                (w.text, w.box, w.confidence) for w in line.words
-            ]
-        else:
-            word_iter = [
-                (text, wbox, line.confidence)
-                for text, wbox in split_line_into_words(line.text, line.box)
-            ]
+        # Real engine boxes when usable; otherwise (or when those boxes fail the
+        # sanity check) the sanitized proportional split.
+        word_iter = word_boxes_for_line(line)
         for wi, (word_text, wbox, wconf) in enumerate(word_iter, start=1):
             w = _sub(
                 line_span,
