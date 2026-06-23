@@ -56,6 +56,13 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 STAGED: dict[str, Path] = {}
 JOBS: dict[str, dict] = {}
 
+# Page counts are computed off the upload request (a slow scan of big multi-frame
+# TIFFs/PDFs shouldn't hold staging hostage). ``None`` means "still counting";
+# the browser polls /api/staged-pages to fill the numbers in. They're a display
+# hint only -- processing and estimating recount independently.
+STAGED_PAGES: dict[str, int | None] = {}
+_STAGED_PAGES_LOCK = threading.Lock()
+
 # Browser heartbeat / auto-shutdown state. Tests don't start the watchdog; it is
 # kicked off explicitly from __main__ when the CLI launches the server.
 _LAST_PING_AT: float | None = None
@@ -156,6 +163,17 @@ def _page_count(path: Path) -> int:
     return count_content_pages(path)
 
 
+def _count_pages_bg(file_ids: list[str]) -> None:
+    """Fill in page counts for just-staged files, off the request thread. Counts
+    are recorded one at a time so the browser's poll sees them appear
+    incrementally rather than all-or-nothing at the end of a big batch."""
+    for fid in file_ids:
+        path = STAGED.get(fid)
+        n = _page_count(path) if path is not None else None
+        with _STAGED_PAGES_LOCK:
+            STAGED_PAGES[fid] = n
+
+
 _UPLOAD_CHUNK = 1024 * 1024  # stream uploads to disk a MB at a time
 
 
@@ -164,12 +182,16 @@ def upload(files: list[UploadFile] = File(...)):
     """Stage uploaded files for transcription.
 
     Declared **sync** (``def``) on purpose: Starlette runs a sync endpoint in a
-    worker thread, so the blocking disk writes and page counts for a large batch
-    don't stall the event loop — the browser heartbeat and job-status polls keep
-    being served, and the auto-shutdown watchdog won't trip mid-upload. Each file
-    is also *streamed* to disk in chunks rather than read whole into memory, so a
-    multi-GB batch doesn't balloon RAM. The browser uploads in bounded batches
-    (see ``app.js``), so each call returns quickly with steady progress.
+    worker thread, so the blocking disk writes for a large batch don't stall the
+    event loop — the browser heartbeat and job-status polls keep being served,
+    and the auto-shutdown watchdog won't trip mid-upload. Each file is also
+    *streamed* to disk in chunks rather than read whole into memory, so a
+    multi-GB batch doesn't balloon RAM.
+
+    Page counts are deliberately **not** computed here: scanning a stack of big
+    multi-frame TIFFs/PDFs could add seconds per batch, and the count is only a
+    display hint. The request returns the moment the bytes are on disk; a
+    background worker fills counts in, and the browser polls /api/staged-pages.
     """
     staged = []
     for f in files:
@@ -184,12 +206,25 @@ def upload(files: list[UploadFile] = File(...)):
         with dest.open("wb") as out:
             shutil.copyfileobj(f.file, out, _UPLOAD_CHUNK)
         STAGED[file_id] = dest
-        staged.append(
-            {"id": file_id, "name": Path(f.filename).name, "pages": _page_count(dest)}
-        )
+        staged.append({"id": file_id, "name": Path(f.filename).name, "pages": None})
     if not staged:
         raise HTTPException(400, f"No supported files. Allowed: {sorted(SUPPORTED_EXT)}")
+    new_ids = [s["id"] for s in staged]
+    with _STAGED_PAGES_LOCK:
+        for fid in new_ids:
+            STAGED_PAGES[fid] = None  # "counting" until the worker records a number
+    threading.Thread(target=_count_pages_bg, args=(new_ids,), daemon=True).start()
     return {"files": staged}
+
+
+@app.get("/api/staged-pages")
+def staged_pages():
+    """Current page counts for staged files: ``{id: int}`` once known, ``null``
+    while a file is still being counted. The browser polls this after an upload
+    to fill the staged list's page pills in, without ever blocking the upload (or
+    Transcribe/Estimate, which work the moment files are staged) on the scan."""
+    with _STAGED_PAGES_LOCK:
+        return {"pages": dict(STAGED_PAGES)}
 
 
 class ProcessRequest(BaseModel):

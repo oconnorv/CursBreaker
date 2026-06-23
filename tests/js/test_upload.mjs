@@ -70,10 +70,14 @@ const check = (name, cond, extra) => {
   else { failures++; console.log("FAIL", name, extra !== undefined ? ":: " + extra : ""); }
 };
 
-const { planUploadBatches, formatBytes, uploadStatusText } = sandbox;
+const { planUploadBatches, formatBytes, uploadStatusText,
+        pagesLabel, pendingPageCounts, applyStagedPages } = sandbox;
 check("planUploadBatches is exported", typeof planUploadBatches === "function");
 check("formatBytes is exported", typeof formatBytes === "function");
 check("uploadStatusText is exported", typeof uploadStatusText === "function");
+check("pagesLabel is exported", typeof pagesLabel === "function");
+check("pendingPageCounts is exported", typeof pendingPageCounts === "function");
+check("applyStagedPages is exported", typeof applyStagedPages === "function");
 
 const MB = 1024 * 1024;
 const file = (size) => ({ size });
@@ -102,17 +106,37 @@ check("every file accounted for", b.flat().length === 2, b.flat().length);
 check("empty input -> no batches", planUploadBatches([], 20, 256 * MB).length === 0);
 
 // --- Group C: status line ------------------------------------------------ //
-let s = uploadStatusText({ sentBytes: MB, totalBytes: 4 * MB, filesDone: 0, filesTotal: 10, scanning: false });
+let s = uploadStatusText({ sentBytes: MB, totalBytes: 4 * MB, filesDone: 0, filesTotal: 10, saving: false });
 check("uploading shows percent", s.includes("Uploading… 25%"), s);
 check("uploading shows byte progress", s.includes("(1.0 MB of 4.0 MB)"), s);
 check("uploading shows file counts", s.includes("0/10 file(s) ready"), s);
 
-s = uploadStatusText({ sentBytes: 4 * MB, totalBytes: 4 * MB, filesDone: 4, filesTotal: 10, scanning: true });
-check("scanning phase is labelled", s.startsWith("Scanning pages…"), s);
-check("scanning still reports files", s.includes("4/10 file(s) ready"), s);
+s = uploadStatusText({ sentBytes: 4 * MB, totalBytes: 4 * MB, filesDone: 4, filesTotal: 10, saving: true });
+check("saving phase is labelled", s.startsWith("Saving…"), s);
+check("saving still reports files", s.includes("4/10 file(s) ready"), s);
 
-s = uploadStatusText({ sentBytes: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, scanning: false });
+s = uploadStatusText({ sentBytes: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, saving: false });
 check("zero totals don't divide-by-zero", s === "Uploading… 0%", s);
+
+// --- Group D: lazy page counts ------------------------------------------- //
+check("pagesLabel pending -> counting…", pagesLabel(null) === "counting…", pagesLabel(null));
+check("pagesLabel undefined -> counting…", pagesLabel(undefined) === "counting…", pagesLabel(undefined));
+check("pagesLabel number -> N page(s)", pagesLabel(3) === "3 page(s)", pagesLabel(3));
+check("pagesLabel zero is a real count", pagesLabel(0) === "0 page(s)", pagesLabel(0));
+
+const list = [{ id: "a", pages: null }, { id: "b", pages: 2 }, { id: "c", pages: null }];
+check("pendingPageCounts true when any null", pendingPageCounts(list) === true);
+let changed = applyStagedPages(list, { a: 5 });  // only 'a' resolves this round
+check("applyStagedPages reports a change", changed === true);
+check("applyStagedPages fills the resolved count", list[0].pages === 5, list[0].pages);
+check("applyStagedPages leaves already-known counts", list[1].pages === 2, list[1].pages);
+check("applyStagedPages leaves still-pending null", list[2].pages === null, String(list[2].pages));
+check("pendingPageCounts still true (c pending)", pendingPageCounts(list) === true);
+changed = applyStagedPages(list, { c: 7 });
+check("applyStagedPages resolves the last one", list[2].pages === 7 && changed === true, list[2].pages);
+check("pendingPageCounts false once all known", pendingPageCounts(list) === false);
+check("applyStagedPages no-op when nothing new", applyStagedPages(list, { a: 99 }) === false);
+check("applyStagedPages didn't overwrite a known count", list[0].pages === 5, list[0].pages);
 
 console.log("\n" + (failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"));
 process.exit(failures === 0 ? 0 : 1);

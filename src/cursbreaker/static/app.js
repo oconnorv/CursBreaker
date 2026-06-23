@@ -259,11 +259,11 @@ function formatBytes(n) {
 }
 
 // The status line during an upload. Two phases per batch: "Uploading" while
-// bytes move, then "Scanning pages…" once they've all arrived but the server is
-// still reading page counts -- the part that, unlabelled, looks like a freeze.
-function uploadStatusText({ sentBytes, totalBytes, filesDone, filesTotal, scanning }) {
+// bytes move, then "Saving…" once they've all arrived but the server is still
+// flushing them to disk -- the part that, unlabelled, looks like a freeze.
+function uploadStatusText({ sentBytes, totalBytes, filesDone, filesTotal, saving }) {
   const pct = totalBytes ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0;
-  const head = scanning ? "Scanning pages…" : `Uploading… ${pct}%`;
+  const head = saving ? "Saving…" : `Uploading… ${pct}%`;
   const size = totalBytes ? ` (${formatBytes(sentBytes)} of ${formatBytes(totalBytes)})` : "";
   const files = filesTotal ? ` · ${filesDone}/${filesTotal} file(s) ready` : "";
   return head + size + files;
@@ -271,8 +271,8 @@ function uploadStatusText({ sentBytes, totalBytes, filesDone, filesTotal, scanni
 
 // POST one batch via XMLHttpRequest so we can watch the body upload (fetch
 // can't). onProgress(loadedBytes) ticks during the send; onUploaded() fires the
-// moment the body is fully sent (server now scanning); resolves with the parsed
-// {files:[...]} JSON.
+// moment the body is fully sent (server now saving to disk); resolves with the
+// parsed {files:[...]} JSON.
 function uploadBatchXHR(batchFiles, onProgress, onUploaded) {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
@@ -303,10 +303,10 @@ async function uploadFiles(fileList) {
   const batches = planUploadBatches(files);
   let sentBase = 0;   // bytes from already-completed batches
   let filesDone = 0;  // files successfully staged so far
-  const show = (loaded, scanning) =>
+  const show = (loaded, saving) =>
     (note.textContent = uploadStatusText({
       sentBytes: sentBase + Math.min(loaded, totalBytes - sentBase),
-      totalBytes, filesDone, filesTotal, scanning,
+      totalBytes, filesDone, filesTotal, saving,
     }));
   announce(`Uploading ${filesTotal} file(s), ${formatBytes(totalBytes)}.`);
   show(0, false);
@@ -316,7 +316,7 @@ async function uploadFiles(fileList) {
       const data = await uploadBatchXHR(
         batch,
         (loaded) => show(loaded, false),
-        () => show(batchBytes, true),  // body fully sent -> server is scanning
+        () => show(batchBytes, true),  // body fully sent -> server is saving it
       );
       sentBase += batchBytes;
       const accepted = (data && data.files) || [];
@@ -335,6 +335,8 @@ async function uploadFiles(fileList) {
     note.textContent = "Upload failed: " + e.message + partial;
     announce("Upload failed: " + e.message);
   }
+  // Fill in page counts (computed lazily server-side) for everything now staged.
+  pollStagedPages();
 }
 
 // The action note doubles as a transient status/error line. This is its
@@ -344,12 +346,19 @@ function stagedStatus() {
   return staged.length ? `${staged.length} file(s) ready` : "";
 }
 
+// Page counts arrive after staging (computed lazily server-side), so a freshly
+// staged file shows "counting…" until its number lands.
+function pagesLabel(pages) {
+  return (pages === null || pages === undefined) ? "counting…" : `${pages} page(s)`;
+}
+
 function renderStaged() {
   const ul = $("staged");
   ul.innerHTML = "";
   for (const f of staged) {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${f.pages} page(s)</span></span>`;
+    li.dataset.id = f.id;  // so refreshStagedPills can update just this row
+    li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${pagesLabel(f.pages)}</span></span>`;
     const rm = document.createElement("button");
     rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
     rm.title = "Remove " + f.name;
@@ -364,6 +373,58 @@ function renderStaged() {
   const est = $("estimate-info");
   if (est) { est.hidden = true; est.innerHTML = ""; }
   $("action-note").textContent = stagedStatus();
+}
+
+// ---- lazy page counts --------------------------------------------------- //
+// The server counts pages in the background after staging; we poll for the
+// numbers and slot them into the existing rows. This never touches the buttons
+// or action note, so it's safe to run alongside an in-flight transcription
+// (counts are cosmetic; Transcribe/Estimate don't wait on them).
+let stagedPagesTimer = null;
+
+function pendingPageCounts(list) {
+  return list.some((f) => f.pages === null || f.pages === undefined);
+}
+
+// Merge server counts into the staged model; returns true if anything changed.
+function applyStagedPages(list, pages) {
+  let changed = false;
+  for (const f of list) {
+    if ((f.pages === null || f.pages === undefined) && typeof pages[f.id] === "number") {
+      f.pages = pages[f.id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Update only the page-count pills in place (no full re-render, so the Transcribe
+// button's state and the action note are left exactly as they are).
+function refreshStagedPills() {
+  const ul = $("staged");
+  if (!ul) return;
+  for (const f of staged) {
+    const li = ul.querySelector(`li[data-id="${f.id}"]`);
+    const pill = li && li.querySelector(".pill");
+    if (pill) pill.textContent = pagesLabel(f.pages);
+  }
+}
+
+function pollStagedPages() {
+  clearInterval(stagedPagesTimer);
+  if (!pendingPageCounts(staged)) return;
+  let ticks = 0;
+  const tick = async () => {
+    let data;
+    try { data = await api("GET", "/api/staged-pages"); }
+    catch (e) { return; }  // transient; keep polling (the cap still bounds us)
+    if (applyStagedPages(staged, data.pages || {})) refreshStagedPills();
+    // Stop once every file has a number, or after a generous cap so a lost
+    // server (e.g. a restart) can't leave us polling forever.
+    if (!pendingPageCounts(staged) || ++ticks > 600) clearInterval(stagedPagesTimer);
+  };
+  tick();
+  stagedPagesTimer = setInterval(tick, 700);
 }
 
 // ---- processing --------------------------------------------------------- //
