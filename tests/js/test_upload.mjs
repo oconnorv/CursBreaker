@@ -70,11 +70,12 @@ const check = (name, cond, extra) => {
   else { failures++; console.log("FAIL", name, extra !== undefined ? ":: " + extra : ""); }
 };
 
-const { planUploadBatches, formatBytes, uploadStatusText,
+const { planUploadBatches, formatBytes, uploadStatusText, isSupportedFile,
         pagesLabel, pendingPageCounts, applyStagedPages } = sandbox;
 check("planUploadBatches is exported", typeof planUploadBatches === "function");
 check("formatBytes is exported", typeof formatBytes === "function");
 check("uploadStatusText is exported", typeof uploadStatusText === "function");
+check("isSupportedFile is exported", typeof isSupportedFile === "function");
 check("pagesLabel is exported", typeof pagesLabel === "function");
 check("pendingPageCounts is exported", typeof pendingPageCounts === "function");
 check("applyStagedPages is exported", typeof applyStagedPages === "function");
@@ -87,6 +88,23 @@ check("formatBytes bytes", formatBytes(812) === "812 B", formatBytes(812));
 check("formatBytes MB one-decimal", formatBytes(3.4 * MB) === "3.4 MB", formatBytes(3.4 * MB));
 check("formatBytes GB rounds >=10", formatBytes(10 * 1024 * MB) === "10 GB", formatBytes(10 * 1024 * MB));
 check("formatBytes handles junk", formatBytes(undefined) === "0 B", formatBytes(undefined));
+
+// --- Group A2: supported-type filter ------------------------------------ //
+for (const name of ["scan.png", "p.PDF", "x.Tiff", "a.tif", "b.jpg", "c.jpeg", "d.gif"]) {
+  check(`isSupportedFile accepts ${name}`, isSupportedFile({ name }) === true, name);
+}
+for (const name of ["notes.docx", "readme.txt", "Thumbs.db", ".DS_Store", "noext"]) {
+  check(`isSupportedFile rejects ${name}`, isSupportedFile({ name }) === false, name);
+}
+check("isSupportedFile tolerates missing name", isSupportedFile({}) === false);
+check("isSupportedFile tolerates null", isSupportedFile(null) === false);
+// The bug this guards: an all-unsupported lead group would otherwise become its
+// own batch and 400. After filtering, only the supported files are batched.
+const mixed = [{ name: "a.docx", size: 1 }, { name: "b.docx", size: 1 }, { name: "c.png", size: 1 }];
+const supported = mixed.filter(isSupportedFile);
+check("filter leaves only supported", supported.length === 1 && supported[0].name === "c.png");
+check("planUploadBatches over filtered set has no empty/unsupported batch",
+  planUploadBatches(supported, 2, 256 * MB).flat().every(isSupportedFile));
 
 // --- Group B: batch planning -------------------------------------------- //
 // Count cap: 45 files at 20/batch -> 20 + 20 + 5.

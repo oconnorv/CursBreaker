@@ -225,8 +225,20 @@ function updateModelPricingHint() {
 // here is copying bytes to disk and reading page counts -- never the Gemini API.
 // For big jobs (e.g. a 10 GB book) that's slow enough to need real feedback, so
 // we upload in bounded batches over XHR (fetch can't report upload progress)
-// and show a live byte + file count. These three helpers are pure and top-level
-// so the Node test harness can exercise them directly.
+// and show a live byte + file count. These helpers are pure and top-level so the
+// Node test harness can exercise them directly.
+
+// Mirror the server's accepted types (images.SUPPORTED_EXT). The browse dialog
+// already constrains itself via the input's `accept` list, but drag-and-drop
+// does not -- so we filter here too. Without it, an all-unsupported batch (e.g.
+// 20 stray .docx dropped ahead of a .png) would 400 and abort the rest of the
+// upload; filtering first means valid files always go, and the byte/file totals
+// reflect only what will actually upload. The server still re-checks.
+const SUPPORTED_EXT = [".tif", ".tiff", ".jpg", ".jpeg", ".png", ".gif", ".pdf"];
+function isSupportedFile(f) {
+  const name = ((f && f.name) || "").toLowerCase();
+  return SUPPORTED_EXT.some((ext) => name.endsWith(ext));
+}
 
 // Bound each POST by BOTH a file count and a byte size, so the server holds only
 // a batch at a time, each request returns quickly (keeping the heartbeat alive
@@ -296,8 +308,19 @@ function uploadBatchXHR(batchFiles, onProgress, onUploaded) {
 
 async function uploadFiles(fileList) {
   if (!fileList || !fileList.length) return;
-  const files = Array.from(fileList);
   const note = $("action-note");
+  // Drop unsupported files up front (drag-and-drop bypasses the input's accept
+  // filter), so a stray .docx can't form an all-unsupported batch that 400s and
+  // strands the valid files behind it.
+  const all = Array.from(fileList);
+  const files = all.filter(isSupportedFile);
+  const skipped = all.length - files.length;
+  if (!files.length) {
+    note.textContent = `No supported files. Allowed: ${SUPPORTED_EXT.join(", ")}`;
+    announce("No supported files to upload. Allowed types: " + SUPPORTED_EXT.join(", "));
+    return;
+  }
+  const skippedNote = skipped ? ` · skipped ${skipped} unsupported file(s)` : "";
   const totalBytes = files.reduce((s, f) => s + (Number(f.size) || 0), 0);
   const filesTotal = files.length;
   const batches = planUploadBatches(files);
@@ -327,8 +350,9 @@ async function uploadFiles(fileList) {
       renderStaged();
       if (sentBase < totalBytes) show(0, false);
     }
-    note.textContent = stagedStatus();
-    announce(`${filesDone} file(s) ready to transcribe.`);
+    note.textContent = stagedStatus() + skippedNote;
+    announce(`${filesDone} file(s) ready to transcribe.` +
+      (skipped ? ` Skipped ${skipped} unsupported file(s).` : ""));
   } catch (e) {
     renderStaged();  // keep whatever staged before the failure
     const partial = filesDone ? ` (${filesDone} file(s) staged first)` : "";
