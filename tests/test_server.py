@@ -143,6 +143,37 @@ def test_full_flow(run_with_mock, png_path):
     assert "sample.alto.xml" in names and "sample.hocr" in names
 
 
+def test_upload_streams_multiple_files_in_one_batch(png_path, pdf_path):
+    # The browser uploads in batches; one request can carry several files. Each
+    # is streamed to disk (not read whole into memory) and page-counted, and all
+    # come back staged with their real page counts intact.
+    with open(png_path, "rb") as p, open(pdf_path, "rb") as d:
+        up = client.post(
+            "/api/upload",
+            files=[
+                ("files", ("a.png", p, "image/png")),
+                ("files", ("b.pdf", d, "application/pdf")),
+            ],
+        ).json()
+    by_name = {f["name"]: f for f in up["files"]}
+    assert set(by_name) == {"a.png", "b.pdf"}
+    assert by_name["a.png"]["pages"] == 1
+    assert by_name["b.pdf"]["pages"] == 2  # the 2-page PDF fixture
+
+
+def test_uploaded_bytes_survive_streaming_roundtrip(png_path):
+    # Streaming the body to disk must reproduce the source exactly -- a corrupt
+    # copy would surface as a wrong page count or a failed decode downstream.
+    from cursbreaker import server
+
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    staged_path = server.STAGED[up["files"][0]["id"]]
+    assert staged_path.read_bytes() == png_path.read_bytes()
+
+
 def test_upload_rejects_unsupported_types(tmp_path):
     bad = tmp_path / "notes.docx"
     bad.write_bytes(b"nope")

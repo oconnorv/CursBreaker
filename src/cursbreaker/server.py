@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -155,8 +156,21 @@ def _page_count(path: Path) -> int:
     return count_content_pages(path)
 
 
+_UPLOAD_CHUNK = 1024 * 1024  # stream uploads to disk a MB at a time
+
+
 @app.post("/api/upload")
-async def upload(files: list[UploadFile] = File(...)):
+def upload(files: list[UploadFile] = File(...)):
+    """Stage uploaded files for transcription.
+
+    Declared **sync** (``def``) on purpose: Starlette runs a sync endpoint in a
+    worker thread, so the blocking disk writes and page counts for a large batch
+    don't stall the event loop — the browser heartbeat and job-status polls keep
+    being served, and the auto-shutdown watchdog won't trip mid-upload. Each file
+    is also *streamed* to disk in chunks rather than read whole into memory, so a
+    multi-GB batch doesn't balloon RAM. The browser uploads in bounded batches
+    (see ``app.js``), so each call returns quickly with steady progress.
+    """
     staged = []
     for f in files:
         if not is_supported(f.filename or ""):
@@ -166,7 +180,9 @@ async def upload(files: list[UploadFile] = File(...)):
         sub = STAGE_DIR / file_id
         sub.mkdir(parents=True, exist_ok=True)
         dest = sub / Path(f.filename).name
-        dest.write_bytes(await f.read())
+        f.file.seek(0)
+        with dest.open("wb") as out:
+            shutil.copyfileobj(f.file, out, _UPLOAD_CHUNK)
         STAGED[file_id] = dest
         staged.append(
             {"id": file_id, "name": Path(f.filename).name, "pages": _page_count(dest)}

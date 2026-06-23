@@ -221,21 +221,119 @@ function updateModelPricingHint() {
 }
 
 // ---- upload / staging --------------------------------------------------- //
+// Uploads are local (browser -> the bundled server on 127.0.0.1), so the time
+// here is copying bytes to disk and reading page counts -- never the Gemini API.
+// For big jobs (e.g. a 10 GB book) that's slow enough to need real feedback, so
+// we upload in bounded batches over XHR (fetch can't report upload progress)
+// and show a live byte + file count. These three helpers are pure and top-level
+// so the Node test harness can exercise them directly.
+
+// Bound each POST by BOTH a file count and a byte size, so the server holds only
+// a batch at a time, each request returns quickly (keeping the heartbeat alive
+// and the staged list filling steadily), and one failed batch never sinks the
+// rest. A single file bigger than the byte cap still gets its own batch.
+const UPLOAD_MAX_FILES = 20;
+const UPLOAD_MAX_BYTES = 256 * 1024 * 1024;  // 256 MB
+function planUploadBatches(files, maxFiles = UPLOAD_MAX_FILES, maxBytes = UPLOAD_MAX_BYTES) {
+  const batches = [];
+  let cur = [], curBytes = 0;
+  for (const f of files) {
+    const size = Number(f.size) || 0;
+    if (cur.length && (cur.length >= maxFiles || curBytes + size > maxBytes)) {
+      batches.push(cur); cur = []; curBytes = 0;
+    }
+    cur.push(f); curBytes += size;
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+
+// Human-readable byte size: "812 B", "3.4 MB", "9.7 GB".
+function formatBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+  return (n < 10 ? n.toFixed(1) : Math.round(n)) + " " + units[i];
+}
+
+// The status line during an upload. Two phases per batch: "Uploading" while
+// bytes move, then "Scanning pages…" once they've all arrived but the server is
+// still reading page counts -- the part that, unlabelled, looks like a freeze.
+function uploadStatusText({ sentBytes, totalBytes, filesDone, filesTotal, scanning }) {
+  const pct = totalBytes ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0;
+  const head = scanning ? "Scanning pages…" : `Uploading… ${pct}%`;
+  const size = totalBytes ? ` (${formatBytes(sentBytes)} of ${formatBytes(totalBytes)})` : "";
+  const files = filesTotal ? ` · ${filesDone}/${filesTotal} file(s) ready` : "";
+  return head + size + files;
+}
+
+// POST one batch via XMLHttpRequest so we can watch the body upload (fetch
+// can't). onProgress(loadedBytes) ticks during the send; onUploaded() fires the
+// moment the body is fully sent (server now scanning); resolves with the parsed
+// {files:[...]} JSON.
+function uploadBatchXHR(batchFiles, onProgress, onUploaded) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    for (const f of batchFiles) fd.append("files", f);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    if (xhr.upload) {
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded); };
+      xhr.upload.onload = () => { if (onUploaded) onUploaded(); };
+    }
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.detail || xhr.statusText || `HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(fd);
+  });
+}
+
 async function uploadFiles(fileList) {
   if (!fileList || !fileList.length) return;
-  const fd = new FormData();
-  for (const f of fileList) fd.append("files", f);
+  const files = Array.from(fileList);
   const note = $("action-note");
-  note.textContent = "Uploading…";
+  const totalBytes = files.reduce((s, f) => s + (Number(f.size) || 0), 0);
+  const filesTotal = files.length;
+  const batches = planUploadBatches(files);
+  let sentBase = 0;   // bytes from already-completed batches
+  let filesDone = 0;  // files successfully staged so far
+  const show = (loaded, scanning) =>
+    (note.textContent = uploadStatusText({
+      sentBytes: sentBase + Math.min(loaded, totalBytes - sentBase),
+      totalBytes, filesDone, filesTotal, scanning,
+    }));
+  announce(`Uploading ${filesTotal} file(s), ${formatBytes(totalBytes)}.`);
+  show(0, false);
   try {
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    const data = await res.json();
-    staged.push(...data.files);
-    renderStaged();
-    note.textContent = "";
+    for (const batch of batches) {
+      const batchBytes = batch.reduce((s, f) => s + (Number(f.size) || 0), 0);
+      const data = await uploadBatchXHR(
+        batch,
+        (loaded) => show(loaded, false),
+        () => show(batchBytes, true),  // body fully sent -> server is scanning
+      );
+      sentBase += batchBytes;
+      const accepted = (data && data.files) || [];
+      staged.push(...accepted);
+      filesDone += accepted.length;
+      // Surface staged files as each batch lands. renderStaged() resets the note
+      // to its resting summary, so re-apply progress while more batches remain.
+      renderStaged();
+      if (sentBase < totalBytes) show(0, false);
+    }
+    note.textContent = stagedStatus();
+    announce(`${filesDone} file(s) ready to transcribe.`);
   } catch (e) {
-    note.textContent = "Upload failed: " + e.message;
+    renderStaged();  // keep whatever staged before the failure
+    const partial = filesDone ? ` (${filesDone} file(s) staged first)` : "";
+    note.textContent = "Upload failed: " + e.message + partial;
+    announce("Upload failed: " + e.message);
   }
 }
 
