@@ -86,6 +86,21 @@ def test_status_and_text_colors_meet_aaa_7to1_both_themes():
             assert r >= AAA_NORMAL, f"{selector} {label}: {r:.2f}:1 < {AAA_NORMAL}:1"
 
 
+# --- 1.4.6, applied: links must actually use the AAA --link token -------- #
+def test_inline_links_use_the_link_token_not_the_browser_default():
+    """A 7:1 --link token only helps if links actually use it. An <a> in a
+    container with no link-colour rule falls back to the user-agent default
+    (#0000EE, ~1.7:1 on the dark panel -- and #551A8B, ~1.5:1, once visited),
+    both well under AAA. So every text container that can render an <a> must
+    colour it with var(--link)."""
+    css = _css()
+    for container in (".hint", ".estimate-info", ".token-text", ".credits",
+                      ".keyhelp-body"):
+        m = re.search(re.escape(container) + r" a\b[^{]*\{[^}]*\}", css)
+        assert m, f"{container} a: no link-colour rule (falls back to UA default)"
+        assert "var(--link)" in m.group(0), f"{container} a must use var(--link)"
+
+
 # --- 2.5.5 Target Size (Enhanced) ---------------------------------------- #
 def test_interactive_targets_are_at_least_44px():
     css = _css()

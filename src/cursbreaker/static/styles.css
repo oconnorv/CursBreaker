@@ -167,6 +167,11 @@ main {
 .field > span, .field > label, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .hint { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+/* Links inside a hint don't inherit the hint's --muted colour -- the UA gives
+   anchors their own #0000EE/#551A8B (visited), which is ~1.7:1/~1.5:1 on the
+   dark panel. Apply the AAA --link token so both states clear 7:1; as an author
+   rule it also overrides the UA :visited colour, so a clicked link stays legible. */
+.hint a { color: var(--link); text-decoration: underline; }
 
 input[type=text], input[type=password], input[type=number], select, input:not([type]) {
   width: 100%; padding: 10px 12px; border-radius: 10px;
