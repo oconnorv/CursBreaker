@@ -267,9 +267,19 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .dropzone p { margin: 4px 0; }
 .muted { color: var(--muted); font-size: 13px; }
 
-.staged { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-direction: column; gap: 8px; }
-.staged:empty { margin: 0; }
-.staged li { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--panel-2); padding: 10px 12px; border-radius: 10px; font-size: 14px; }
+/* Staged files render as one bounded, scrollable panel rather than a tower of
+   per-file cards: a large batch (e.g. a whole imaged book) would otherwise push
+   Transcribe / Estimate and the progress bar far below the fold. Same treatment
+   as the activity log under the progress bar -- a fixed-size box that scrolls. */
+.staged {
+  list-style: none; margin: 14px 0 0; padding: 6px;
+  max-height: 260px; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+}
+.staged:empty { display: none; }
+/* Flat rows inside the single box, divided by a hairline -- not separate cards. */
+.staged li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 4px 3px 10px; font-size: 14px; }
+.staged li + li { border-top: 1px solid var(--border); }
 .staged .rm {
   cursor: pointer; color: var(--muted); border: 1px solid transparent; background: none;
   font-size: 18px; line-height: 1; border-radius: 8px;
