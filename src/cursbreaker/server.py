@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from lxml import etree
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from . import __version__
 from .config import load_settings, save_settings
@@ -307,6 +308,7 @@ def process(req: ProcessRequest):
         "current": "",             # latest step message
         "stage": "",               # latest step's machine tag
         "log": [],                 # append-only activity log (capped)
+        "log_total": 0,            # lines ever emitted; lets the UI append past the cap
         "done_units": 0,           # pages completed across the whole job (bar)
         "total_units": 0,          # total pages across the whole job (bar)
         "results": [],
@@ -325,11 +327,18 @@ def process(req: ProcessRequest):
 _LOG_CAP = 500  # keep the most recent N activity-log lines (bounds memory + JSON)
 
 
-def _append_capped(log: list, message: str, cap: int = _LOG_CAP) -> None:
-    """Append a line, trimming to the most recent ``cap`` entries."""
+def _append_log(job: dict, message: str, cap: int = _LOG_CAP) -> None:
+    """Append a line to the job's activity log, keeping only the most recent
+    ``cap`` entries in memory while tracking ``log_total`` -- the running count of
+    every line ever emitted. The browser appends against that total, so the log
+    keeps flowing even after old lines are trimmed. (Using the stored list's
+    length as the cursor froze the log the moment that length plateaued at the
+    cap -- about file 83 of 160 at ~6 lines/file.)"""
+    log = job["log"]
     log.append(message)
     if len(log) > cap:
         del log[: len(log) - cap]
+    job["log_total"] = job.get("log_total", 0) + 1
 
 
 def _run_job(job_id, paths, settings, out_dir):
@@ -356,7 +365,7 @@ def _run_job(job_id, paths, settings, out_dir):
             job["done_units"] = ev.units_done
             job["total_units"] = ev.units_total or job["total_units"]
             job["done"], job["total"] = ev.file_index, ev.file_total
-            _append_capped(job["log"], ev.message)
+            _append_log(job, ev.message)
 
         results = process_batch(
             paths, provider, settings, out_dir, report, units_total=total_units,
@@ -471,7 +480,7 @@ def cancel_job(job_id: str):
                    "take effect once the current step finishes.")
         else:
             msg = "Cancellation requested — stopping after the current step finishes."
-        _append_capped(job["log"], msg)
+        _append_log(job, msg)
         job["current"] = msg
         job["_cancel"] = True  # set last, so the message is logged before the worker stops
     return {"status": job["status"], "cancelling": bool(job.get("_cancel"))}
@@ -497,21 +506,62 @@ def download(job_id: str, name: str):
     return FileResponse(_safe_output(job_id, name), filename=name)
 
 
+# Friendly download-type names -> the filename suffixes they map to on disk, for
+# the type-filtered zip (e.g. ?types=hocr,txt). Lets a user grab just the hOCR of
+# a 160-page book instead of the whole archive -- which also holds the page images
+# that back the previews and is what made the all-files zip so large.
+_TYPE_SUFFIXES = {
+    "hocr": (".hocr",),
+    "alto": (".alto.xml",),
+    "pdf": (".pdf",),
+    "txt": (".txt",),
+}
+
+
 @app.get("/api/download/{job_id}.zip")
-def download_zip(job_id: str):
+def download_zip(job_id: str, types: str | None = None):
+    """Zip a job's outputs. ``?types=hocr,txt`` restricts the archive to those
+    file types; omit it to include everything (page images included).
+
+    The archive is streamed to a temp file and served from disk -- never held
+    whole in memory -- so a large job can't exhaust RAM and take the process down
+    (the previous build-in-memory-then-getvalue() path doubled a multi-GB zip in
+    RAM and got OOM-killed)."""
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
     out_dir = Path(job["out_dir"])
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(out_dir.iterdir()):
-            if f.is_file():
+
+    selected = suffixes = None
+    if types is not None and types.strip():
+        selected = [t for t in (s.strip().lower() for s in types.split(",")) if t in _TYPE_SUFFIXES]
+        if not selected:
+            raise HTTPException(400, "Unrecognized download type(s).")
+        suffixes = tuple(suf for t in selected for suf in _TYPE_SUFFIXES[t])
+
+    files = [
+        f for f in sorted(out_dir.iterdir())
+        if f.is_file() and (suffixes is None or f.name.endswith(suffixes))
+    ]
+    if not files:
+        raise HTTPException(404, "No matching files to download.")
+
+    tag = "_" + "-".join(selected) if selected else ""
+    tmp = tempfile.NamedTemporaryFile(prefix="cursbreaker_zip_", suffix=".zip", delete=False)
+    tmp.close()
+    tmp_path = Path(tmp.name)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in files:
                 zf.write(f, f.name)
-    return Response(
-        buf.getvalue(),
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return FileResponse(
+        tmp_path,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="cursbreaker_{job_id[:8]}.zip"'},
+        filename=f"cursbreaker_{job_id[:8]}{tag}.zip",
+        background=BackgroundTask(tmp_path.unlink, missing_ok=True),
     )
 
 

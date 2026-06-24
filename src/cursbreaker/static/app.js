@@ -466,7 +466,8 @@ async function transcribe() {
   if (est) { est.hidden = true; est.innerHTML = ""; }
   $("token-text").textContent = "";
   // Reset the activity log + bar for a fresh run.
-  const logReset = $("activity-log"); if (logReset) logReset.replaceChildren();
+  const logReset = $("activity-log");
+  if (logReset) { logReset.replaceChildren(); logReset.dataset.shown = "0"; }
   const liveReset = $("activity-live"); if (liveReset) liveReset.textContent = "";
   $("progress-bar").style.width = "0%";
   $("progress").setAttribute("aria-valuenow", "0");
@@ -519,23 +520,35 @@ function renderProgress(job) {
     : total ? `Processing — page ${done}/${total}`
     : "Processing…";
 
-  // Append-only activity log: the server sends the full (capped) list each
-  // poll; render idempotently by index, rebuilding only if it was trimmed.
+  // Append-only activity log. The server keeps only the last _LOG_CAP lines but
+  // reports `log_total` — the running count of every line ever emitted. We track
+  // how many we've already rendered (as an absolute index) and append the rest,
+  // so the log keeps flowing even once the stored window starts trimming old
+  // lines. (Using the rendered count as the cursor froze the log the instant
+  // lines.length plateaued at the cap — about file 83 of 160 at ~6 lines/file.)
   const logEl = $("activity-log");
   if (logEl) {
     const lines = job.log || [];
-    // Decide BEFORE adding lines whether to follow the tail: only if the user is
-    // already parked at (or within a few px of) the bottom. If they've scrolled
-    // up to read, leave their position alone — they can scroll back down to
-    // resume following.
+    const total = Number(job.log_total != null ? job.log_total : lines.length);
+    const base = total - lines.length;             // absolute index of lines[0]
+    let shown = Number(logEl.dataset.shown || 0);  // absolute lines already shown
+    // Decide BEFORE adding whether to follow the tail: only if the user is parked
+    // at (within a few px of) the bottom. If they've scrolled up to read, leave
+    // their position alone — they can scroll back down to resume following.
     const stickToBottom =
       logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= 4;
-    if (logEl.childElementCount > lines.length) logEl.replaceChildren();
-    for (let i = logEl.childElementCount; i < lines.length; i++) {
+    // A total below what we've shown means a fresh/reset job — start the log over.
+    if (total < shown) { logEl.replaceChildren(); shown = 0; }
+    // Append every line we haven't shown yet that the server still has (absolute
+    // index >= base). If polling fell behind by more than the cap, the unseen
+    // middle is dropped rather than re-flowed — never a freeze.
+    for (let i = Math.max(shown, base) - base; i < lines.length; i++) {
       const li = document.createElement("li");
       li.textContent = lines[i];   // textContent -> no escaping needed
       logEl.appendChild(li);
     }
+    shown = Math.max(shown, total);
+    logEl.dataset.shown = String(shown);
     // Announce only the newest line to screen-reader users.
     if (lines.length) {
       const live = $("activity-live");
@@ -593,9 +606,42 @@ function pollJob(jobId) {
   pollTimer = setInterval(tick, 700);
 }
 
+// ---- bulk download (type-filtered) -------------------------------------- //
+const DOWNLOAD_TYPES = ["hocr", "alto", "pdf", "txt"];
+
+// Which download-type checkboxes are currently ticked.
+function selectedDownloadTypes() {
+  return DOWNLOAD_TYPES.filter((t) => { const cb = $("dl-" + t); return cb && cb.checked; });
+}
+
+// "Download selected" is meaningless with nothing ticked — disable it then.
+function syncDownloadSelected() {
+  const btn = $("dl-selected");
+  if (btn) btn.disabled = selectedDownloadTypes().length === 0;
+}
+
+// Start a download without navigating away: the zip response is an attachment,
+// so a transient anchor click keeps the results page intact.
+function triggerDownload(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  (document.body || document.documentElement).appendChild(a);
+  a.click();
+  a.remove();
+}
+
 function renderResults(jobId, job) {
   $("results-card").hidden = false;
+  // "Everything" includes the page images; the type picker grabs just the chosen
+  // outputs. Both hit the same streamed zip endpoint, so neither can OOM.
   $("zip-link").href = `/api/download/${jobId}.zip`;
+  const dlSel = $("dl-selected");
+  if (dlSel) dlSel.onclick = () => {
+    const types = selectedDownloadTypes();
+    if (types.length) triggerDownload(`/api/download/${jobId}.zip?types=${types.join(",")}`);
+  };
+  syncDownloadSelected();
   // Per-job token total with the transparent dollar disclaimer.
   const totals = $("results-tokens");
   if (totals) {
@@ -849,6 +895,14 @@ function wire() {
   $("transcribe").onclick = transcribe;
   $("estimate").onclick = estimateCost;
   $("cancel-job").onclick = cancelJob;
+
+  // Download-by-type controls in the Results header: keep "Download selected"
+  // enabled only while at least one type is ticked.
+  for (const t of DOWNLOAD_TYPES) {
+    const cb = $("dl-" + t);
+    if (cb) cb.addEventListener("change", syncDownloadSelected);
+  }
+  syncDownloadSelected();
 
   // Settings disclosure (heading > button) toggle + theme switcher.
   $("settings-toggle").onclick = () =>

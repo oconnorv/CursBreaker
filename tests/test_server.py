@@ -156,6 +156,21 @@ def test_full_flow(run_with_mock, png_path):
     names = zipfile.ZipFile(io.BytesIO(zipped.content)).namelist()
     assert "sample.alto.xml" in names and "sample.hocr" in names
 
+    # Type-filtered zip: just the hOCR (the common "I only want hOCR" case).
+    only_hocr = client.get(f"/api/download/{started['job_id']}.zip?types=hocr")
+    assert only_hocr.status_code == 200
+    h = zipfile.ZipFile(io.BytesIO(only_hocr.content)).namelist()
+    assert h and all(n.endswith(".hocr") for n in h)
+
+    # Multiple types combine into one archive; unrequested types stay out.
+    two = client.get(f"/api/download/{started['job_id']}.zip?types=hocr,txt")
+    t = set(zipfile.ZipFile(io.BytesIO(two.content)).namelist())
+    assert any(n.endswith(".hocr") for n in t) and any(n.endswith(".txt") for n in t)
+    assert not any(n.endswith((".pdf", ".alto.xml", ".png")) for n in t)
+
+    # An unrecognized type is a 400 — never a silent full download.
+    assert client.get(f"/api/download/{started['job_id']}.zip?types=bogus").status_code == 400
+
 
 def test_upload_streams_multiple_files_in_one_batch(png_path, pdf_path):
     # The browser uploads in batches; one request can carry several files. Each
@@ -516,12 +531,16 @@ def test_job_status_includes_token_fields(run_with_mock, png_path):
     assert "_provider" not in status
 
 
-def test_append_capped_keeps_most_recent():
-    from cursbreaker.server import _append_capped
-    log = []
+def test_append_log_caps_storage_but_counts_total():
+    # Keeps only the most recent `cap` lines in memory, but tracks log_total so
+    # the browser can append past the cap instead of freezing when the stored
+    # window plateaus (the file-83-of-160 stall).
+    from cursbreaker.server import _append_log
+    job = {"log": [], "log_total": 0}
     for i in range(10):
-        _append_capped(log, f"line {i}", cap=4)
-    assert log == ["line 6", "line 7", "line 8", "line 9"]
+        _append_log(job, f"line {i}", cap=4)
+    assert job["log"] == ["line 6", "line 7", "line 8", "line 9"]  # newest 4 kept
+    assert job["log_total"] == 10                                  # all 10 counted
 
 
 def test_job_status_exposes_activity_log_and_unit_counters(run_with_mock, pdf_path):
