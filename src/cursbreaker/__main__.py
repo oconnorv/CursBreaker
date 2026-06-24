@@ -22,7 +22,15 @@ def main() -> None:
     import uvicorn
     from copy import deepcopy
 
-    from .server import install_access_log_filter, start_autoshutdown
+    from .server import (
+        install_access_log_filter,
+        start_autoshutdown,
+        sweep_stale_workspaces,
+    )
+
+    # Reclaim disk from any earlier run that exited without cleaning up: a crash
+    # or OS kill leaves its temp workspace (copied uploads + outputs) behind.
+    sweep_stale_workspaces()
 
     url = f"http://{args.host}:{args.port}/"
     if not args.no_browser:
