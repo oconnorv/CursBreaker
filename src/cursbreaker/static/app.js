@@ -221,22 +221,146 @@ function updateModelPricingHint() {
 }
 
 // ---- upload / staging --------------------------------------------------- //
+// Uploads are local (browser -> the bundled server on 127.0.0.1), so the time
+// here is copying bytes to disk and reading page counts -- never the Gemini API.
+// For big jobs (e.g. a 10 GB book) that's slow enough to need real feedback, so
+// we upload in bounded batches over XHR (fetch can't report upload progress)
+// and show a live byte + file count. These helpers are pure and top-level so the
+// Node test harness can exercise them directly.
+
+// Mirror the server's accepted types (images.SUPPORTED_EXT). The browse dialog
+// already constrains itself via the input's `accept` list, but drag-and-drop
+// does not -- so we filter here too. Without it, an all-unsupported batch (e.g.
+// 20 stray .docx dropped ahead of a .png) would 400 and abort the rest of the
+// upload; filtering first means valid files always go, and the byte/file totals
+// reflect only what will actually upload. The server still re-checks.
+const SUPPORTED_EXT = [".tif", ".tiff", ".jpg", ".jpeg", ".png", ".gif", ".pdf"];
+function isSupportedFile(f) {
+  const name = ((f && f.name) || "").toLowerCase();
+  return SUPPORTED_EXT.some((ext) => name.endsWith(ext));
+}
+
+// Bound each POST by BOTH a file count and a byte size, so the server holds only
+// a batch at a time, each request returns quickly (keeping the heartbeat alive
+// and the staged list filling steadily), and one failed batch never sinks the
+// rest. A single file bigger than the byte cap still gets its own batch.
+const UPLOAD_MAX_FILES = 20;
+const UPLOAD_MAX_BYTES = 256 * 1024 * 1024;  // 256 MB
+function planUploadBatches(files, maxFiles = UPLOAD_MAX_FILES, maxBytes = UPLOAD_MAX_BYTES) {
+  const batches = [];
+  let cur = [], curBytes = 0;
+  for (const f of files) {
+    const size = Number(f.size) || 0;
+    if (cur.length && (cur.length >= maxFiles || curBytes + size > maxBytes)) {
+      batches.push(cur); cur = []; curBytes = 0;
+    }
+    cur.push(f); curBytes += size;
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+
+// Human-readable byte size: "812 B", "3.4 MB", "9.7 GB".
+function formatBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + " B";
+  const units = ["KB", "MB", "GB", "TB"];
+  let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+  return (n < 10 ? n.toFixed(1) : Math.round(n)) + " " + units[i];
+}
+
+// The status line during an upload. Two phases per batch: "Uploading" while
+// bytes move, then "Saving…" once they've all arrived but the server is still
+// flushing them to disk -- the part that, unlabelled, looks like a freeze.
+function uploadStatusText({ sentBytes, totalBytes, filesDone, filesTotal, saving }) {
+  const pct = totalBytes ? Math.min(100, Math.round((sentBytes / totalBytes) * 100)) : 0;
+  const head = saving ? "Saving…" : `Uploading… ${pct}%`;
+  const size = totalBytes ? ` (${formatBytes(sentBytes)} of ${formatBytes(totalBytes)})` : "";
+  const files = filesTotal ? ` · ${filesDone}/${filesTotal} file(s) ready` : "";
+  return head + size + files;
+}
+
+// POST one batch via XMLHttpRequest so we can watch the body upload (fetch
+// can't). onProgress(loadedBytes) ticks during the send; onUploaded() fires the
+// moment the body is fully sent (server now saving to disk); resolves with the
+// parsed {files:[...]} JSON.
+function uploadBatchXHR(batchFiles, onProgress, onUploaded) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    for (const f of batchFiles) fd.append("files", f);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    if (xhr.upload) {
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded); };
+      xhr.upload.onload = () => { if (onUploaded) onUploaded(); };
+    }
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.detail || xhr.statusText || `HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(fd);
+  });
+}
+
 async function uploadFiles(fileList) {
   if (!fileList || !fileList.length) return;
-  const fd = new FormData();
-  for (const f of fileList) fd.append("files", f);
   const note = $("action-note");
-  note.textContent = "Uploading…";
-  try {
-    const res = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-    const data = await res.json();
-    staged.push(...data.files);
-    renderStaged();
-    note.textContent = "";
-  } catch (e) {
-    note.textContent = "Upload failed: " + e.message;
+  // Drop unsupported files up front (drag-and-drop bypasses the input's accept
+  // filter), so a stray .docx can't form an all-unsupported batch that 400s and
+  // strands the valid files behind it.
+  const all = Array.from(fileList);
+  const files = all.filter(isSupportedFile);
+  const skipped = all.length - files.length;
+  if (!files.length) {
+    note.textContent = `No supported files. Allowed: ${SUPPORTED_EXT.join(", ")}`;
+    announce("No supported files to upload. Allowed types: " + SUPPORTED_EXT.join(", "));
+    return;
   }
+  const skippedNote = skipped ? ` · skipped ${skipped} unsupported file(s)` : "";
+  const totalBytes = files.reduce((s, f) => s + (Number(f.size) || 0), 0);
+  const filesTotal = files.length;
+  const batches = planUploadBatches(files);
+  let sentBase = 0;   // bytes from already-completed batches
+  let filesDone = 0;  // files successfully staged so far
+  const show = (loaded, saving) =>
+    (note.textContent = uploadStatusText({
+      sentBytes: sentBase + Math.min(loaded, totalBytes - sentBase),
+      totalBytes, filesDone, filesTotal, saving,
+    }));
+  announce(`Uploading ${filesTotal} file(s), ${formatBytes(totalBytes)}.`);
+  show(0, false);
+  try {
+    for (const batch of batches) {
+      const batchBytes = batch.reduce((s, f) => s + (Number(f.size) || 0), 0);
+      const data = await uploadBatchXHR(
+        batch,
+        (loaded) => show(loaded, false),
+        () => show(batchBytes, true),  // body fully sent -> server is saving it
+      );
+      sentBase += batchBytes;
+      const accepted = (data && data.files) || [];
+      staged.push(...accepted);
+      filesDone += accepted.length;
+      // Surface staged files as each batch lands. renderStaged() resets the note
+      // to its resting summary, so re-apply progress while more batches remain.
+      renderStaged();
+      if (sentBase < totalBytes) show(0, false);
+    }
+    note.textContent = stagedStatus() + skippedNote;
+    announce(`${filesDone} file(s) ready to transcribe.` +
+      (skipped ? ` Skipped ${skipped} unsupported file(s).` : ""));
+  } catch (e) {
+    renderStaged();  // keep whatever staged before the failure
+    const partial = filesDone ? ` (${filesDone} file(s) staged first)` : "";
+    note.textContent = "Upload failed: " + e.message + partial;
+    announce("Upload failed: " + e.message);
+  }
+  // Fill in page counts (computed lazily server-side) for everything now staged.
+  pollStagedPages();
 }
 
 // The action note doubles as a transient status/error line. This is its
@@ -246,12 +370,19 @@ function stagedStatus() {
   return staged.length ? `${staged.length} file(s) ready` : "";
 }
 
+// Page counts arrive after staging (computed lazily server-side), so a freshly
+// staged file shows "counting…" until its number lands.
+function pagesLabel(pages) {
+  return (pages === null || pages === undefined) ? "counting…" : `${pages} page(s)`;
+}
+
 function renderStaged() {
   const ul = $("staged");
   ul.innerHTML = "";
   for (const f of staged) {
     const li = document.createElement("li");
-    li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${f.pages} page(s)</span></span>`;
+    li.dataset.id = f.id;  // so refreshStagedPills can update just this row
+    li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${pagesLabel(f.pages)}</span></span>`;
     const rm = document.createElement("button");
     rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
     rm.title = "Remove " + f.name;
@@ -266,6 +397,58 @@ function renderStaged() {
   const est = $("estimate-info");
   if (est) { est.hidden = true; est.innerHTML = ""; }
   $("action-note").textContent = stagedStatus();
+}
+
+// ---- lazy page counts --------------------------------------------------- //
+// The server counts pages in the background after staging; we poll for the
+// numbers and slot them into the existing rows. This never touches the buttons
+// or action note, so it's safe to run alongside an in-flight transcription
+// (counts are cosmetic; Transcribe/Estimate don't wait on them).
+let stagedPagesTimer = null;
+
+function pendingPageCounts(list) {
+  return list.some((f) => f.pages === null || f.pages === undefined);
+}
+
+// Merge server counts into the staged model; returns true if anything changed.
+function applyStagedPages(list, pages) {
+  let changed = false;
+  for (const f of list) {
+    if ((f.pages === null || f.pages === undefined) && typeof pages[f.id] === "number") {
+      f.pages = pages[f.id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// Update only the page-count pills in place (no full re-render, so the Transcribe
+// button's state and the action note are left exactly as they are).
+function refreshStagedPills() {
+  const ul = $("staged");
+  if (!ul) return;
+  for (const f of staged) {
+    const li = ul.querySelector(`li[data-id="${f.id}"]`);
+    const pill = li && li.querySelector(".pill");
+    if (pill) pill.textContent = pagesLabel(f.pages);
+  }
+}
+
+function pollStagedPages() {
+  clearInterval(stagedPagesTimer);
+  if (!pendingPageCounts(staged)) return;
+  let ticks = 0;
+  const tick = async () => {
+    let data;
+    try { data = await api("GET", "/api/staged-pages"); }
+    catch (e) { return; }  // transient; keep polling (the cap still bounds us)
+    if (applyStagedPages(staged, data.pages || {})) refreshStagedPills();
+    // Stop once every file has a number, or after a generous cap so a lost
+    // server (e.g. a restart) can't leave us polling forever.
+    if (!pendingPageCounts(staged) || ++ticks > 600) clearInterval(stagedPagesTimer);
+  };
+  tick();
+  stagedPagesTimer = setInterval(tick, 700);
 }
 
 // ---- processing --------------------------------------------------------- //
