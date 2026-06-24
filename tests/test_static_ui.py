@@ -49,3 +49,13 @@ def test_remove_button_keeps_its_44px_target_inside_the_box():
     # below the 2.5.5 target size.
     block = _block(_css(), ".staged .rm {")
     assert "min-width: 44px" in block and "min-height: 44px" in block
+
+
+def test_results_offer_type_filtered_bulk_download():
+    """The Results card exposes the type picker (hOCR / ALTO / PDF / text), a
+    'download selected' action, and the everything-zip fallback -- so a large job
+    can be fetched by type instead of one file at a time."""
+    html = client.get("/").text
+    for box in ('id="dl-hocr"', 'id="dl-alto"', 'id="dl-pdf"', 'id="dl-txt"'):
+        assert box in html, f"missing download checkbox {box}"
+    assert 'id="dl-selected"' in html and 'id="zip-link"' in html

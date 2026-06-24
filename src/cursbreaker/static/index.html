@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=24" />
+  <link rel="stylesheet" href="/static/styles.css?v=25" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -163,7 +163,21 @@
     <section class="card" id="results-card" aria-labelledby="results-heading" hidden>
       <div class="card-head">
         <h2 id="results-heading" tabindex="-1">Results</h2>
-        <a id="zip-link" class="btn small" href="#">Download all (.zip)</a>
+      </div>
+      <!-- Bulk download: tick the file types you want and grab them as one zip,
+           instead of saving hundreds of files one at a time. "Everything" also
+           includes the page images. All routes hit the same streamed zip
+           endpoint, so none can exhaust memory. -->
+      <div class="download-bar">
+        <fieldset class="dl-types">
+          <legend>Download by type</legend>
+          <label><input type="checkbox" id="dl-hocr" value="hocr" checked /> hOCR</label>
+          <label><input type="checkbox" id="dl-alto" value="alto" /> ALTO</label>
+          <label><input type="checkbox" id="dl-pdf" value="pdf" /> Searchable PDF</label>
+          <label><input type="checkbox" id="dl-txt" value="txt" /> Text</label>
+        </fieldset>
+        <button id="dl-selected" class="btn small primary" type="button">Download selected (.zip)</button>
+        <a id="zip-link" class="btn small" href="#">Everything (.zip)</a>
       </div>
       <p id="results-tokens" class="muted token-text" hidden></p>
       <div id="results"></div>
@@ -215,6 +229,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=25"></script>
+  <script src="/static/app.js?v=26"></script>
 </body>
 </html>

@@ -99,6 +99,29 @@ renderProgress({ status: "running", total_units: 2, done_units: 1, log: ["x"] })
 check("trimmed log rebuilds (1 line)", el("activity-log").childElementCount === 1, el("activity-log").childElementCount);
 check("rebuilt line content is x", el("activity-log")._children[0].textContent === "x", el("activity-log")._children[0].textContent);
 
+// --- Group A3: capped log keeps flowing past the cap (regression) -------- //
+// The server keeps only the last N lines but reports log_total; the browser must
+// append against that total, not the (plateaued) stored length — otherwise the
+// log freezes once the cap is hit (the file-83-of-160 stall).
+freshDom();
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["l1", "l2", "l3"], log_total: 3 });
+check("A3 seeded 3 from capped window", el("activity-log").childElementCount === 3, el("activity-log").childElementCount);
+// Cap is 3: next poll drops l1 and adds l4 — length still 3, but total advances.
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["l2", "l3", "l4"], log_total: 4 });
+check("A3 rotated window still appends l4", el("activity-log").childElementCount === 4, el("activity-log").childElementCount);
+check("A3 newest announced is l4", el("activity-live").textContent === "l4", el("activity-live").textContent);
+// A jump of three at once (the window fully turns over between polls).
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["l5", "l6", "l7"], log_total: 7 });
+check("A3 appends l5..l7 (7 total)", el("activity-log").childElementCount === 7, el("activity-log").childElementCount);
+check("A3 last rendered line is l7", el("activity-log")._children[6].textContent === "l7", el("activity-log")._children[6].textContent);
+
+// --- Group A4: polling fell behind by > cap -> show latest, skip the gap - //
+freshDom();
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["a", "b"], log_total: 2 });
+renderProgress({ status: "running", total_units: 1, done_units: 0, log: ["y", "z"], log_total: 9 });
+check("A4 appends only the latest window (4 shown)", el("activity-log").childElementCount === 4, el("activity-log").childElementCount);
+check("A4 newest is z", el("activity-live").textContent === "z", el("activity-live").textContent);
+
 // --- Group B: completion forces 100% + file-count headline -------------- //
 freshDom();
 renderProgress({ status: "done", total_units: 0, done_units: 0, log: ["done"], results: [{}, {}] });
