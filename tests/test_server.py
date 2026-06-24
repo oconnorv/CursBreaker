@@ -265,6 +265,16 @@ def test_app_js_routes_status_through_announcer():
     assert 'setAttribute("aria-invalid"' in js
 
 
+def test_status_badges_have_a_non_color_icon_cue():
+    # Red-green colour blindness collapses the green "ok" and red "warn" badge
+    # tints to nearly identical tones, so each state must also carry a shape/icon
+    # cue rather than rely on hue alone (belt-and-braces over the differing text).
+    css = client.get("/static/styles.css").text
+    assert ".badge.ok::before" in css and ".badge.warn::before" in css
+    assert r'content: "\2713"' in css   # check mark for the ok state
+    assert 'content: "!"' in css        # a distinct glyph for the warn state
+
+
 def test_staged_list_keeps_list_semantics():
     # list-style:none strips the implicit list role in Safari/VoiceOver, so the
     # staged-files list carries an explicit role="list" to stay announced.
