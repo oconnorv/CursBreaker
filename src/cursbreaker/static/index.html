@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=21" />
+  <link rel="stylesheet" href="/static/styles.css?v=22" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -19,7 +19,7 @@
        outcome reliably, even when a per-section message box toggles `hidden`. -->
   <p id="a11y-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
 
-  <header class="topbar">
+  <header class="topbar" role="banner">
     <div class="brand">
       <span class="logo" aria-hidden="true">CB</span>
       <div>
@@ -49,7 +49,7 @@
 
       <div id="settings-body" class="settings-body">
           <div class="field">
-            <label for="api_key">Gemini API key</label>
+            <label for="api_key">Gemini <abbr title="Application Programming Interface">API</abbr> key</label>
             <div class="row">
               <input type="password" id="api_key" placeholder="Paste your key" autocomplete="off"
                      aria-describedby="api_key-hint" />
@@ -76,7 +76,7 @@
           <fieldset class="field">
             <legend>Content type</legend>
             <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page (printed text included).</label>
-            <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract OCRs locally; no Gemini call.</label>
+            <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract <abbr title="optical character recognition">OCR</abbr>s locally; no Gemini call.</label>
           </fieldset>
           <div id="tesseract-info" class="key-info" role="status" aria-live="polite" hidden></div>
 
@@ -109,9 +109,9 @@
               <label class="field"><span>Media resolution</span>
                 <select id="media_resolution"><option>high</option><option>medium</option><option>low</option></select>
               </label>
-              <label class="field"><span>PDF DPI</span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
+              <label class="field"><span><abbr title="Portable Document Format">PDF</abbr> <abbr title="dots per inch — how finely a PDF page is rendered to an image">DPI</abbr></span><input type="number" id="pdf_dpi" step="50" min="72" /></label>
               <label class="field"><span>Max image dimension (0 = original)</span><input type="number" id="max_dimension" step="256" min="0" /></label>
-              <label class="field"><span>Word confidence (hOCR)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
+              <label class="field"><span>Word confidence (<abbr title="HTML-based OCR — an open format storing recognized words and where they sit on the page">hOCR</abbr>)</span><input type="number" id="word_confidence" min="0" max="100" /></label>
               <label class="field"><span>Tesseract language</span>
                 <input id="tesseract_language" list="tesseract-langs" placeholder="eng" />
                 <datalist id="tesseract-langs"></datalist>
@@ -127,7 +127,7 @@
       <div class="card-head"><h2 id="documents-heading">Documents</h2></div>
       <div id="dropzone" class="dropzone">
         <p><b>Drop image or PDF files here</b></p>
-        <p class="muted">TIFF, JPEG, PNG, GIF, PDF &mdash; bulk import supported</p>
+        <p class="muted"><abbr title="Tagged Image File Format">TIFF</abbr>, <abbr title="Joint Photographic Experts Group">JPEG</abbr>, <abbr title="Portable Network Graphics">PNG</abbr>, <abbr title="Graphics Interchange Format">GIF</abbr>, PDF &mdash; bulk import supported</p>
         <button class="btn" id="browse" type="button">Browse files</button>
         <input type="file" id="file-input" multiple accept=".tif,.tiff,.jpg,.jpeg,.png,.gif,.pdf" hidden />
       </div>
@@ -181,14 +181,36 @@
     </div>
   </dialog>
 
-  <footer class="credits">
+  <details class="glossary">
+    <summary>Glossary &mdash; what these terms mean (plain language)</summary>
+    <dl class="glossary-body">
+      <dt>Handwriting transcription</dt>
+      <dd>Turning the handwriting in a scanned page into typed, editable text.</dd>
+      <dt><abbr title="optical character recognition">OCR</abbr></dt>
+      <dd>Software that reads text out of an image.</dd>
+      <dt>hOCR</dt>
+      <dd>A file that stores each recognized word and the spot on the page where it sits, so the page becomes searchable.</dd>
+      <dt><abbr title="Analyzed Layout and Text Object">ALTO</abbr> XML</dt>
+      <dd>A library/archive standard file holding the same word positions as hOCR, in a different format.</dd>
+      <dt>Bounding box</dt>
+      <dd>The rectangle marking where a line or word sits on the page.</dd>
+      <dt>API key</dt>
+      <dd>A private code that lets this app use Google's Gemini service on your behalf.</dd>
+      <dt>DPI</dt>
+      <dd>Dots per inch &mdash; how finely a PDF page is turned into an image. Higher is sharper but larger.</dd>
+      <dt>Token</dt>
+      <dd>The unit Google counts, and bills, for the text and images it reads and writes.</dd>
+    </dl>
+  </details>
+
+  <footer class="credits" role="contentinfo">
     Created by John O'Connor at
     <a href="https://www.cmlibrary.org/services/archives-and-special-collections" target="_blank" rel="noopener noreferrer">Charlotte Mecklenburg Library</a>
     using
     <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code</a>.
     Based on work by Mark Humphries at
     <a href="https://generativehistory.substack.com/p/gemini-3-solves-handwriting-recognition" target="_blank" rel="noopener noreferrer"><cite>Generative History</cite></a>.
-    Licensed under AGPL-3.0.
+    Licensed under <abbr title="GNU Affero General Public License">AGPL</abbr>-3.0.
     View the repository on
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>

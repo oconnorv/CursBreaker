@@ -3,15 +3,15 @@
   --panel: #1a1e35;
   --panel-2: #232845;
   --text: #e9ecf5;
-  --muted: #9aa3c0;       /* ~6:1 on --panel, ~5.2:1 on --panel-2 (AA) */
+  --muted: #bac0d4;       /* secondary text — >=7:1 on panel/panel-2 (AAA 1.4.6) */
   --accent: #7c5cff;      /* decorative: gradients, borders */
   --accent-2: #d61e5a;
-  --link: #b3a3ff;        /* accessible purple for link/summary TEXT (~7:1) */
+  --link: #baabff;        /* link/summary TEXT — >=7:1 on panel/panel-2 (AAA) */
   --focus: #c9b8ff;       /* high-contrast keyboard focus ring */
   --ok: #25c281;          /* decorative tints/borders */
   --err: #ff6b6b;
-  --ok-ink: #6ee7b0;      /* status TEXT on green tint (>=5:1) */
-  --err-ink: #ffb3b3;     /* status TEXT on red tint (>=5:1) */
+  --ok-ink: #6ee7b0;      /* status TEXT on green tint (>=7:1, AAA) */
+  --err-ink: #ffb3b3;     /* status TEXT on red tint (>=7:1, AAA) */
   --border: rgba(255,255,255,.12);
   --border-strong: rgba(255,255,255,.24);
   --shadow: 0 10px 30px rgba(0,0,0,.25);
@@ -34,8 +34,8 @@
   --focus: #4a31c8;       /* strong focus ring on light */
   --ok: #1a8f5e;
   --err: #d33a3a;
-  --ok-ink: #0a6b41;      /* dark green status text on the pale-green tint */
-  --err-ink: #b3261e;     /* dark red status text on the pale-red tint */
+  --ok-ink: #085735;      /* status text on pale-green tint — >=7:1 (AAA) */
+  --err-ink: #8d1e18;     /* status text on pale-red tint — >=7:1 (AAA) */
   --border: rgba(20,23,43,.16);
   --border-strong: rgba(20,23,43,.34);
   --shadow: 0 8px 24px rgba(20,23,43,.12);
@@ -59,6 +59,7 @@ body {
 .skip-link {
   position: absolute; left: 12px; top: -60px;
   z-index: 100; padding: 10px 16px; border-radius: 10px;
+  min-height: 44px; display: inline-flex; align-items: center;  /* 2.5.5 target size */
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--link); text-decoration: none;
   transition: top .15s ease;
@@ -98,7 +99,7 @@ h1 { margin: 0; font-size: 22px; }
 .theme-radio:focus-visible { outline: none; }   /* ring goes on the label instead */
 .theme-seg {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 12px; min-height: 36px; font-size: 13px;
+  padding: 7px 14px; min-height: 44px; font-size: 13px;  /* 2.5.5 target size */
   color: var(--muted); cursor: pointer; user-select: none;
 }
 .theme-seg .seg-icon { font-size: 14px; line-height: 1; }
@@ -140,7 +141,7 @@ main {
    pattern) -- a real <h2> for navigation AND a real toggle, which a heading
    nested inside <summary> doesn't reliably give. */
 .disclosure {
-  display: inline-flex; align-items: center;
+  display: inline-flex; align-items: center; min-height: 44px;  /* 2.5.5 target size */
   background: none; border: none; padding: 0; margin: 0;
   color: inherit; font: inherit; cursor: pointer;
 }
@@ -170,7 +171,7 @@ fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 
 input[type=text], input[type=password], input[type=number], select, input:not([type]) {
   width: 100%; padding: 10px 12px; border-radius: 10px;
   border: 1px solid var(--border-strong); background: var(--panel-2);
-  color: var(--text); font-size: 14px;
+  color: var(--text); font-size: 14px; min-height: 44px;  /* 2.5.5 target size */
 }
 ::placeholder { color: var(--muted); opacity: 1; }
 
@@ -180,7 +181,8 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .check { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0; font-size: 14px; }
 .radio { display: block; margin: 6px 0; font-size: 14px; }
 .advanced { margin-top: 8px; }
-.advanced summary { cursor: pointer; color: var(--link); font-size: 14px; }
+.advanced summary { cursor: pointer; color: var(--link); font-size: 14px;
+  min-height: 44px; padding: 11px 0; box-sizing: border-box; }  /* 2.5.5 target size */
 
 /* "How to get an API key" inline help (collapsed by default, no clutter). */
 .keyhelp-body { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.55; }
@@ -190,13 +192,17 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .keyhelp-body a { color: var(--link); }
 .keyhelp-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 
+/* All pointer targets are at least 44x44 CSS px (WCAG 2.5.5 Target Size,
+   Enhanced/AAA). Buttons centre their label with inline-flex so the taller box
+   stays visually balanced; "small" only trims padding/font, never the hit area. */
 .btn {
   border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text);
   padding: 10px 16px; border-radius: 10px; font-size: 14px; cursor: pointer;
-  text-decoration: none; display: inline-block; min-height: 36px;
+  text-decoration: none; min-height: 44px; min-width: 44px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
 .btn:hover { border-color: var(--link); }
-.btn.small { padding: 7px 12px; font-size: 13px; min-height: 32px; }
+.btn.small { padding: 8px 14px; font-size: 13px; }  /* keeps the 44px min-height */
 .btn.primary { background: linear-gradient(135deg, var(--accent), #6a49ff); border: none; font-weight: 600; color: #fff; }
 .btn.primary:disabled { opacity: .5; cursor: not-allowed; }
 /* Cancel: hint that it's a "stop" action on hover (not destructive — completed
@@ -262,7 +268,7 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .staged .rm {
   cursor: pointer; color: var(--muted); border: 1px solid transparent; background: none;
   font-size: 18px; line-height: 1; border-radius: 8px;
-  min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center;
 }
 .staged .rm:hover { color: var(--err-ink); border-color: rgba(255,107,107,.4); }
 
@@ -302,6 +308,20 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
   text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .credits a { color: var(--link); text-decoration: underline; }
 .credits a:hover { text-decoration: none; }
+
+/* Inline abbreviation cue: a dotted underline signals the title-expansion is
+   there (WCAG 3.1.4 Abbreviations); the <abbr title> is the actual mechanism. */
+abbr[title] { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+
+/* Plain-language glossary: supplemental content for the domain jargon, for
+   readers who don't know the terms (supports 3.1.3 Unusual Words and softens
+   3.1.5 Reading Level, which a transcription tool can't fully meet). */
+.glossary { max-width: 880px; margin: 10px auto 0; padding: 0 20px; }
+.glossary > summary { color: var(--link); cursor: pointer; font-size: 14px;
+  min-height: 44px; padding: 11px 0; box-sizing: border-box; }   /* 2.5.5 target size */
+.glossary-body { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.glossary-body dt { color: var(--text); font-weight: 600; margin-top: 10px; }
+.glossary-body dd { margin: 2px 0 0; padding: 0; }
 
 /* Preview dialog (native <dialog> -> focus trap, Esc, inert background for free) */
 dialog.modal {
