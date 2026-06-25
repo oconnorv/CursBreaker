@@ -35,7 +35,7 @@ from .config import load_settings, save_settings
 from .gemini_client import make_provider
 from .hocr import XHTML_NS
 from .images import SUPPORTED_EXT, count_content_pages, is_supported
-from .pipeline import estimate_usage, process_batch
+from .pipeline import OUTPUT_FORMATS, estimate_usage, process_batch
 from .pricing import (
     CATALOG,
     PRICES_AS_OF,
@@ -326,6 +326,9 @@ def stage_path(req: StagePathRequest):
 class ProcessRequest(BaseModel):
     file_ids: list[str]
     mode: str | None = None
+    # Output kinds to write (subset of pipeline.OUTPUT_FORMATS). Empty/omitted
+    # means "create everything", so leaving the picker untouched is unchanged.
+    outputs: list[str] | None = None
 
 
 class EstimateRequest(BaseModel):
@@ -390,6 +393,10 @@ def process(req: ProcessRequest):
     if not settings.resolved_api_key():
         raise HTTPException(400, "No Gemini API key set. Add one in Settings.")
 
+    # Keep only recognized output kinds; empty (nothing picked, or all unknown)
+    # falls through to "create everything" in the pipeline.
+    outputs = [o for o in (req.outputs or []) if o in OUTPUT_FORMATS]
+
     job_id = uuid.uuid4().hex
     out_dir = JOBS_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -418,7 +425,7 @@ def process(req: ProcessRequest):
         "_resume_action": None,    # "resume" | "end" -- read by the worker on wake
     }
     threading.Thread(
-        target=_run_job, args=(job_id, paths, settings, out_dir), daemon=True
+        target=_run_job, args=(job_id, paths, settings, out_dir, outputs), daemon=True
     ).start()
     return {"job_id": job_id}
 
@@ -440,7 +447,7 @@ def _append_log(job: dict, message: str, cap: int = _LOG_CAP) -> None:
     job["log_total"] = job.get("log_total", 0) + 1
 
 
-def _run_job(job_id, paths, settings, out_dir):
+def _run_job(job_id, paths, settings, out_dir, outputs=None):
     job = JOBS[job_id]
     try:
         provider = make_provider(settings)
@@ -496,6 +503,7 @@ def _run_job(job_id, paths, settings, out_dir):
             unit_counts=unit_counts,
             should_cancel=lambda: bool(job.get("_cancel")),
             on_disk_full=on_disk_full,
+            outputs=outputs,
         )
         job["results"] = [
             {

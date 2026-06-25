@@ -543,6 +543,20 @@ def test_append_log_caps_storage_but_counts_total():
     assert job["log_total"] == 10                                  # all 10 counted
 
 
+def test_process_outputs_only_creates_selected_formats(run_with_mock, png_path):
+    with open(png_path, "rb") as fh:
+        up = client.post("/api/upload", files={"files": ("p.png", fh, "image/png")}).json()
+    fid = up["files"][0]["id"]
+    started = client.post("/api/process", json={"file_ids": [fid], "outputs": ["hocr"]}).json()
+    status = _wait_done(started["job_id"])
+
+    assert status["status"] == "done"
+    res = status["results"][0]
+    assert res["hocr"]                                   # the one requested format
+    assert res["txt"] is None and res["alto"] is None and res["pdf"] is None
+    assert res["images"] == []                           # page PNGs skipped
+
+
 def test_resume_and_end_release_a_paused_job():
     """/resume and /end record the action and wake the blocked worker; both are
     no-ops unless the job is actually paused, and 404 on an unknown job."""

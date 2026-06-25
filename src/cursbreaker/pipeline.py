@@ -12,7 +12,7 @@ import errno
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Collection
 
 from .align import align_lines, align_words
 from .alto import build_alto
@@ -288,6 +288,19 @@ def _tesseract_words_for_line(
     return words
 
 
+# Output kinds a run can write. An empty/unknown selection means "all of them",
+# so the default (and a malformed request) still produces everything.
+OUTPUT_FORMATS = ("txt", "hocr", "alto", "pdf", "images")
+
+
+def _wanted_outputs(outputs: Collection[str] | None) -> set[str]:
+    """Normalize a requested output selection: empty/None -> every format."""
+    if not outputs:
+        return set(OUTPUT_FORMATS)
+    wanted = {o for o in outputs if o in OUTPUT_FORMATS}
+    return wanted or set(OUTPUT_FORMATS)
+
+
 def process_file(
     path: str | Path,
     provider: TranscriptionProvider,
@@ -296,10 +309,15 @@ def process_file(
     *,
     report: StepReporter | None = None,
     should_cancel: CancelCheck | None = None,
+    outputs: Collection[str] | None = None,
 ) -> FileResult:
     report = report or _noop
     path = Path(path)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Which outputs to write (empty/None -> all). Page PNGs are saved when the
+    # user wants the images *or* the searchable PDF, which embeds them.
+    wanted = _wanted_outputs(outputs)
+    save_pngs = "images" in wanted or "pdf" in wanted
 
     # Snapshot the provider's running token total so we can report exactly what
     # *this* file added (the provider is shared across a batch).
@@ -313,7 +331,7 @@ def process_file(
     report(f"{total_pages} page(s) to transcribe", stage="load")
 
     page_results: list[PageResult] = []
-    image_names: list[str] = []
+    saved_png_names: list[str] = []  # PNGs actually written (for the PDF + result)
     pages = iter_pages(
         path,
         preprocess=settings.preprocess,
@@ -341,26 +359,30 @@ def process_file(
                     should_cancel=should_cancel,
                 )
             )
-            png_name = f"{loaded.output_stem}.png"
-            loaded.image.save(out_dir / png_name)
-            image_names.append(png_name)
-            # A page counts as "done" (advancing the bar) once it's transcribed
-            # and its PNG is saved; process_batch increments the global page
-            # counter on this stage.
+            if save_pngs:
+                png_name = f"{loaded.output_stem}.png"
+                loaded.image.save(out_dir / png_name)
+                saved_png_names.append(png_name)
+            # A page counts as "done" (advancing the bar) once it's transcribed;
+            # process_batch increments the global page counter on this stage.
             report(f"Page {i}/{total_pages} done", stage="page_done")
     finally:
         # Close the lazy renderer (releases the open PDF) if we bailed early.
         pages.close()
 
-    report("Writing outputs (text, hOCR, ALTO, searchable PDF)…", stage="write")
+    _labels = {"txt": "text", "hocr": "hOCR", "alto": "ALTO", "pdf": "searchable PDF"}
+    writing = [_labels[f] for f in ("txt", "hocr", "alto", "pdf") if f in wanted]
+    report(
+        f"Writing outputs ({', '.join(writing)})…" if writing else "Finalizing…",
+        stage="write",
+    )
     stem = path.stem
-    txt_name = f"{stem}.txt"
-    hocr_name = f"{stem}.hocr"
-    alto_name = f"{stem}.alto.xml"
-    pdf_name = f"{stem}.pdf"
+    txt_name = hocr_name = alto_name = pdf_name = None  # set only for what we write
 
-    txt = "\n\n".join(p.plain_text.strip() for p in page_results)
-    (out_dir / txt_name).write_text(txt, "utf-8")
+    if "txt" in wanted:
+        txt_name = f"{stem}.txt"
+        txt = "\n\n".join(p.plain_text.strip() for p in page_results)
+        (out_dir / txt_name).write_text(txt, "utf-8")
 
     content = settings.content_type or "handwriting"
     if content == "text":
@@ -371,22 +393,35 @@ def process_file(
             mode_label += "+wordboxes"
     ocr_system = f"CursBreaker ({mode_label})"
 
-    hocr_bytes = build_hocr(
-        page_results, ocr_system=ocr_system, language=settings.language
-    )
-    (out_dir / hocr_name).write_bytes(hocr_bytes)
+    if "hocr" in wanted:
+        hocr_name = f"{stem}.hocr"
+        (out_dir / hocr_name).write_bytes(
+            build_hocr(page_results, ocr_system=ocr_system, language=settings.language)
+        )
 
     # ALTO XML carries the same line/word geometry as hOCR in the Library of
     # Congress's preservation format, for ALTO/METS-based repositories.
-    alto_bytes = build_alto(
-        page_results, ocr_system=ocr_system, language=settings.language
-    )
-    (out_dir / alto_name).write_bytes(alto_bytes)
+    if "alto" in wanted:
+        alto_name = f"{stem}.alto.xml"
+        (out_dir / alto_name).write_bytes(
+            build_alto(page_results, ocr_system=ocr_system, language=settings.language)
+        )
 
-    pdf_bytes = build_searchable_pdf(
-        page_results, [out_dir / n for n in image_names]
-    )
-    (out_dir / pdf_name).write_bytes(pdf_bytes)
+    if "pdf" in wanted:
+        pdf_name = f"{stem}.pdf"
+        (out_dir / pdf_name).write_bytes(
+            build_searchable_pdf(page_results, [out_dir / n for n in saved_png_names])
+        )
+
+    # The page PNGs are an output in their own right only when "images" is wanted.
+    # If they were rendered solely to embed in the PDF, delete them now -- they're
+    # the other big disk cost a user trims by not asking for images.
+    if "images" in wanted:
+        image_names = saved_png_names
+    else:
+        for n in saved_png_names:
+            (out_dir / n).unlink(missing_ok=True)
+        image_names = []
 
     n_pages = len(page_results)
     n_lines = sum(len(p.lines) for p in page_results)
@@ -423,6 +458,7 @@ def process_batch(
     unit_counts: list[int] | None = None,
     should_cancel: CancelCheck | None = None,
     on_disk_full: DiskFullHandler | None = None,
+    outputs: Collection[str] | None = None,
 ) -> list[FileResult]:
     """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
 
@@ -474,6 +510,7 @@ def process_batch(
                     process_file(
                         path, provider, settings, out_dir,
                         report=report_line, should_cancel=should_cancel,
+                        outputs=outputs,
                     )
                 )
             except JobCancelled:  # cancelled mid-file: drop the partial file, stop
