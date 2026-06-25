@@ -411,7 +411,11 @@ def process(req: ProcessRequest):
         "error": None,
         "model": model,
         "tokens": _usage_to_dict(None, model),  # zeros until the provider exists
+        "paused": False,           # true while the worker is blocked on a full disk
+        "pause_reason": None,      # message shown in the disk-full banner
         "_cancel": False,          # private flag flipped by /api/jobs/{id}/cancel
+        "_resume": threading.Event(),  # released by /api/jobs/{id}/resume or /end
+        "_resume_action": None,    # "resume" | "end" -- read by the worker on wake
     }
     threading.Thread(
         target=_run_job, args=(job_id, paths, settings, out_dir), daemon=True
@@ -446,8 +450,12 @@ def _run_job(job_id, paths, settings, out_dir):
 
         # Page count up front (cheap; same function /api/upload uses) so the bar
         # is page-driven and actually fills. count_content_pages already returns
-        # 1 on any read error, so the sum is always >= the file count.
-        total_units = sum(count_content_pages(p) for p in paths)
+        # 1 on any read error, so the sum is always >= the file count. Keep the
+        # per-file counts too: process_batch reconciles the page counter to this
+        # budget at each file boundary, so a file that errors or under-renders
+        # can't strand the bar below 100% partway through a big batch.
+        unit_counts = [count_content_pages(p) for p in paths]
+        total_units = sum(unit_counts)
         job["total_units"] = total_units
 
         # The worker thread writes these scalar keys and appends to job["log"];
@@ -462,9 +470,32 @@ def _run_job(job_id, paths, settings, out_dir):
             job["done"], job["total"] = ev.file_index, ev.file_total
             _append_log(job, ev.message)
 
+        def on_disk_full():
+            """Block the worker on a full disk -- no more files, no more API calls --
+            until the browser hits /resume (space freed -> retry) or /end (stop and
+            keep what's saved). The job stays ``running`` so the page keeps polling
+            and shows the banner."""
+            ev = job["_resume"]
+            ev.clear()
+            job["_resume_action"] = None
+            job["pause_reason"] = (
+                "No space left on the disk. Free up space, then Resume to "
+                "continue — or Stop to finish with the files already saved."
+            )
+            job["paused"] = True  # set last: the banner shows only once we're parked
+            # Wake on the event; poll _cancel too so a shutdown/cancel still frees us.
+            while not ev.wait(timeout=1.0):
+                if job.get("_cancel"):
+                    break
+            job["paused"] = False
+            job["pause_reason"] = None
+            return "resume" if job.get("_resume_action") == "resume" else "end"
+
         results = process_batch(
             paths, provider, settings, out_dir, report, units_total=total_units,
+            unit_counts=unit_counts,
             should_cancel=lambda: bool(job.get("_cancel")),
+            on_disk_full=on_disk_full,
         )
         job["results"] = [
             {
@@ -485,8 +516,15 @@ def _run_job(job_id, paths, settings, out_dir):
             for r in results
         ]
         job["tokens"] = _usage_to_dict(provider.usage, job["model"])
-        # Completed files (if any) are kept and downloadable even on cancel.
-        job["status"] = "cancelled" if job.get("_cancel") else "done"
+        # Completed files (if any) are kept and downloadable in every stop case.
+        # "stopped" (user ended at a disk-full pause) is distinct from a manual
+        # "cancelled" so the UI can explain what happened.
+        if job.get("stage") == "stopped":
+            job["status"] = "stopped"
+        elif job.get("_cancel"):
+            job["status"] = "cancelled"
+        else:
+            job["status"] = "done"
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc)
@@ -579,6 +617,35 @@ def cancel_job(job_id: str):
         job["current"] = msg
         job["_cancel"] = True  # set last, so the message is logged before the worker stops
     return {"status": job["status"], "cancelling": bool(job.get("_cancel"))}
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str):
+    """Resume a job paused on a full disk -- the user has freed space and wants to
+    retry the file that couldn't be saved. No-op unless the job is actually
+    paused."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown job.")
+    if job.get("paused"):
+        _append_log(job, "Resuming — retrying the file that ran out of disk space.")
+        job["_resume_action"] = "resume"
+        job["_resume"].set()  # set last, after the action is recorded
+    return {"status": job["status"], "paused": bool(job.get("paused"))}
+
+
+@app.post("/api/jobs/{job_id}/end")
+def end_job(job_id: str):
+    """Stop a job paused on a full disk, keeping every file already saved (the
+    user chose to finish rather than free space). No-op unless paused."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown job.")
+    if job.get("paused"):
+        _append_log(job, "Stopping — keeping the files already finished.")
+        job["_resume_action"] = "end"
+        job["_resume"].set()
+    return {"status": job["status"], "paused": bool(job.get("paused"))}
 
 
 # --------------------------------------------------------------------------- #

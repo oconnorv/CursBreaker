@@ -235,6 +235,15 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .key-info .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
 .key-info .glyph { font-weight: 700; font-size: 15px; line-height: 1; }
 
+/* Disk-full pause: a full-width alert inside the progress card (overrides
+   .key-info's compact inline-flex) with its own Resume / Stop actions, shown
+   while the worker is blocked waiting for the user to free space. */
+.pause-banner { display: flex; width: 100%; box-sizing: border-box; align-items: flex-start; }
+.pause-banner[hidden] { display: none; }
+.pause-banner .pause-body { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.pause-banner .pause-reason { margin: 0; }
+.pause-banner .pause-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+
 /* Cost estimate: a neutral box (a dollar figure isn't "success", so it
    shouldn't read green) laid out top-to-bottom -- the headline cost first, then
    the supporting detail as bullets. The red `.warn` (errors) still wins by

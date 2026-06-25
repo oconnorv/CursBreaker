@@ -469,6 +469,7 @@ async function transcribe() {
   const logReset = $("activity-log");
   if (logReset) { logReset.replaceChildren(); logReset.dataset.shown = "0"; }
   const liveReset = $("activity-live"); if (liveReset) liveReset.textContent = "";
+  const pauseReset = $("pause-banner"); if (pauseReset) pauseReset.hidden = true;
   $("progress-bar").style.width = "0%";
   $("progress").setAttribute("aria-valuenow", "0");
   $("results-card").hidden = true;
@@ -498,6 +499,32 @@ async function cancelJob() {
   }
 }
 
+// Disk-full pause controls. resumeJob retries the file that couldn't be saved
+// (the user has freed space); endJob stops and keeps everything already saved.
+async function resumeJob() {
+  if (!activeJobId) return;
+  const btn = $("resume-job");
+  if (btn) { btn.disabled = true; btn.textContent = "Resuming…"; }
+  try {
+    await api("POST", `/api/jobs/${activeJobId}/resume`);
+    announce("Resuming — retrying the file that ran out of space.");
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "I've freed up space — Resume"; }
+  }
+}
+
+async function endJob() {
+  if (!activeJobId) return;
+  const btn = $("stop-job");
+  if (btn) btn.disabled = true;
+  try {
+    await api("POST", `/api/jobs/${activeJobId}/end`);
+    announce("Stopping — keeping the files already finished.");
+  } catch (e) {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // Drive the page-driven bar + the verbose activity log from a job payload.
 // Top-level so the Node test harness can exercise it directly with a fake DOM.
 function renderProgress(job) {
@@ -513,12 +540,37 @@ function renderProgress(job) {
 
   // Concise headline above the log. (Cancelled keeps its partial bar fraction —
   // only "done" forces 100%.)
+  const okCount = (job.results || []).filter((r) => !r.error).length;
   $("progress-text").textContent =
     job.status === "error" ? "Error: " + job.error
+    : job.status === "stopped" ? `Stopped — out of disk space · ${okCount} file(s) saved`
     : job.status === "cancelled" ? `Cancelled — ${(job.results || []).length} file(s) completed`
     : job.status === "done" ? `Done — ${(job.results || []).length} file(s)`
+    : job.paused ? `Paused — no disk space · page ${done}/${total}`
     : total ? `Processing — page ${done}/${total}`
     : "Processing…";
+
+  // Disk-full pause banner. The worker is blocked until the user picks Resume or
+  // Stop, so nothing else is being written or billed while this is up.
+  const pauseEl = $("pause-banner");
+  if (pauseEl) {
+    const paused = !!job.paused;
+    pauseEl.hidden = !paused;
+    if (paused) {
+      const reason = $("pause-reason");
+      if (reason) reason.textContent = job.pause_reason || "No space left on the disk.";
+      // Reset the buttons each time the banner (re)appears — e.g. a resume that
+      // didn't free enough space and paused again.
+      const rb = $("resume-job");
+      if (rb) { rb.disabled = false; rb.textContent = "I've freed up space — Resume"; }
+      const sb = $("stop-job");
+      if (sb) sb.disabled = false;
+    }
+    // The banner owns the stop control while paused; otherwise the normal Cancel
+    // button is available for the whole running job (and restored after a resume).
+    const cancel = $("cancel-job");
+    if (cancel && job.status === "running") cancel.hidden = paused;
+  }
 
   // Append-only activity log. The server keeps only the last _LOG_CAP lines but
   // reports `log_total` — the running count of every line ever emitted. We track
@@ -583,15 +635,20 @@ function pollJob(jobId) {
       if (cancel) { cancel.hidden = true; cancel.disabled = false; cancel.textContent = "Cancel"; }
       $("transcribe").disabled = false;
       $("estimate").disabled = staged.length === 0;
-      // Show whatever finished — completed files remain downloadable on cancel.
+      // Show whatever finished — completed files remain downloadable on cancel
+      // and on a disk-full stop.
       if (job.status === "done") {
         announce(`Transcription complete — ${(job.results || []).length} file(s) ready to download.`);
       } else if (job.status === "cancelled") {
         announce(`Transcription cancelled — ${(job.results || []).length} file(s) completed.`);
+      } else if (job.status === "stopped") {
+        const okCount = (job.results || []).filter((r) => !r.error).length;
+        announce(`Stopped — out of disk space. ${okCount} file(s) saved and ready to download.`);
       } else if (job.status === "error") {
         announce("Transcription failed: " + (job.error || "unknown error"));
       }
-      if ((job.status === "done" || job.status === "cancelled") && (job.results || []).length) {
+      if ((job.status === "done" || job.status === "cancelled" || job.status === "stopped")
+          && (job.results || []).length) {
         renderResults(jobId, job);
         if (job.status === "done") {
           // Send keyboard/screen-reader focus to the freshly-rendered results,
@@ -927,6 +984,8 @@ function wire() {
   $("transcribe").onclick = transcribe;
   $("estimate").onclick = estimateCost;
   $("cancel-job").onclick = cancelJob;
+  const resumeBtn = $("resume-job"); if (resumeBtn) resumeBtn.onclick = resumeJob;
+  const stopBtn = $("stop-job"); if (stopBtn) stopBtn.onclick = endJob;
 
   // Download-by-type controls in the Results header: keep "Download selected"
   // enabled only while at least one type is ticked.

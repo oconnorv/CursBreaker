@@ -1,3 +1,6 @@
+import errno
+from pathlib import Path
+
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 from lxml import etree
@@ -416,6 +419,138 @@ def test_progress_batch_prefixes_filenames(png_path, tmp_path):
     assert any(m.startswith(png_path.name + " · ") for m in page_lines)
     assert any(m.startswith("second.png · ") for m in page_lines)
     assert any(e.stage == "batch_done" for e in events)  # batch cap line
+
+
+def test_failed_file_still_advances_page_counter(png_path, tmp_path):
+    """A file counted in the up-front total but that errors never emits a
+    ``page_done``; the counter must still reconcile to ``done == total`` at the
+    file boundary so the bar reaches 100% instead of freezing partway (the
+    "stuck at 558/830 while the log keeps flowing" bug)."""
+    out = tmp_path / "out"
+    bad = tmp_path / "unreadable.xyz"   # unsupported -> process_file raises
+    bad.write_bytes(b"not an image")
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = []
+    # Budget one page each; only the good file can ever report a page_done.
+    process_batch(
+        [png_path, bad], MockProvider(), settings, out, events.append,
+        units_total=2, unit_counts=[1, 1],
+    )
+    assert any(e.stage == "error" for e in events)   # the bad file is surfaced
+    assert [e.units_done for e in events if e.stage == "page_done"] == [1]
+    # The final event reconciles the counter past the failed file: 2/2, not 1/2.
+    assert events[-1].units_done == 2
+    assert events[-1].units_total == 2
+
+
+def test_page_counter_without_unit_counts_is_unchanged(png_path, tmp_path):
+    """Back-compat: with no ``unit_counts`` the counter only advances on real
+    ``page_done`` events (a failed file leaves the bar short, as before)."""
+    out = tmp_path / "out"
+    bad = tmp_path / "unreadable.xyz"
+    bad.write_bytes(b"not an image")
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = []
+    process_batch([png_path, bad], MockProvider(), settings, out, events.append, units_total=2)
+    assert events[-1].units_done == 1  # no reconciliation without the budget
+
+
+# --- disk-full pause / resume / stop ------------------------------------- #
+
+def test_is_disk_full_detects_enospc_through_exception_chain():
+    from cursbreaker.pipeline import _is_disk_full
+    assert _is_disk_full(OSError(errno.ENOSPC, "No space left on device"))
+    assert not _is_disk_full(OSError(errno.EACCES, "permission denied"))
+    assert not _is_disk_full(ValueError("not a disk error"))
+    try:
+        try:
+            raise OSError(errno.ENOSPC, "full")
+        except OSError as inner:
+            raise RuntimeError("could not write output") from inner
+    except RuntimeError as wrapped:
+        assert _is_disk_full(wrapped)  # found via the __cause__ chain
+
+
+def test_disk_full_pauses_then_resume_retries_the_file(png_path, tmp_path, monkeypatch):
+    """The first save hits ENOSPC; 'resume' retries the same file, which then
+    succeeds — the page counter must account for it, not skip it."""
+    real = process_file
+    attempts = {"n": 0}
+
+    def flaky(path, *a, **k):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr("cursbreaker.pipeline.process_file", flaky)
+    paused = {"n": 0}
+
+    def on_disk_full():
+        paused["n"] += 1
+        return "resume"
+
+    out = tmp_path / "out"
+    events = []
+    results = process_batch(
+        [png_path], MockProvider(), Settings(mode="one_pass"), out, events.append,
+        units_total=1, unit_counts=[1], on_disk_full=on_disk_full,
+    )
+    assert paused["n"] == 1                       # paused exactly once
+    assert attempts["n"] == 2                      # the file was retried
+    assert results and results[0].error is None    # the retry saved it
+    assert any(e.stage == "paused" for e in events)
+    assert events[-1].units_done == 1              # counter reached the total
+
+
+def test_disk_full_stop_keeps_completed_and_halts_remaining(png_path, tmp_path, monkeypatch):
+    """'end' at the pause stops the batch: the file that ran out of space is
+    flagged, earlier files are kept, later files are never started (no wasted
+    API calls)."""
+    real = process_file
+    started = []
+
+    def flaky(path, *a, **k):
+        started.append(Path(path).name)
+        if Path(path).name == "b.png":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr("cursbreaker.pipeline.process_file", flaky)
+    a = png_path
+    b = tmp_path / "b.png"; b.write_bytes(png_path.read_bytes())
+    c = tmp_path / "c.png"; c.write_bytes(png_path.read_bytes())
+    out = tmp_path / "out"
+    events = []
+    results = process_batch(
+        [a, b, c], MockProvider(), Settings(mode="one_pass"), out, events.append,
+        units_total=3, unit_counts=[1, 1, 1], on_disk_full=lambda: "end",
+    )
+    assert "c.png" not in started                                   # 3rd file never started
+    assert results[0].error is None                                 # 1st file kept
+    assert any(r.error and "disk" in r.error.lower() for r in results)  # 2nd flagged
+    assert any(e.stage == "stopped" for e in events)                # clear terminal event
+
+
+def test_disk_full_without_handler_keeps_old_skip_behavior(png_path, tmp_path, monkeypatch):
+    """Back-compat: with no on_disk_full handler (e.g. CLI/tests), an ENOSPC is
+    just a failed file and the batch continues."""
+    real = process_file
+
+    def flaky(path, *a, **k):
+        if Path(path).name == "b.png":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr("cursbreaker.pipeline.process_file", flaky)
+    a = png_path
+    b = tmp_path / "b.png"; b.write_bytes(png_path.read_bytes())
+    out = tmp_path / "out"
+    results = process_batch(
+        [a, b], MockProvider(), Settings(mode="one_pass"), tmp_path / "out", None,
+        units_total=2, unit_counts=[1, 1],
+    )
+    assert len(results) == 2 and results[1].error is not None  # bad file recorded, batch went on
 
 
 def test_progress_default_report_is_optional(png_path, tmp_path):
