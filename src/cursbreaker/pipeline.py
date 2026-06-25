@@ -397,19 +397,26 @@ def process_batch(
     out_dir: Path,
     report: Reporter | None = None,
     units_total: int = 0,
+    unit_counts: list[int] | None = None,
     should_cancel: CancelCheck | None = None,
 ) -> list[FileResult]:
     """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
 
     ``units_total`` is the total page count across the batch (the bar is
     page-driven); the running "pages done" counter advances on each ``page_done``
-    step. Messages are prefixed with the filename only when the batch has more
-    than one file. ``should_cancel`` (checked between files and pages) stops the
-    batch cooperatively; files already finished keep their outputs."""
+    step. ``unit_counts`` is the per-file page budget (the up-front estimate whose
+    sum is ``units_total``); when given, the page counter is reconciled to that
+    budget at each file boundary so a file that errors -- or renders fewer pages
+    than its metadata promised -- can't strand the bar below 100% (the symptom
+    being a counter frozen at e.g. 558/830 while the log keeps flowing through the
+    remaining files). Messages are prefixed with the filename only when the batch
+    has more than one file. ``should_cancel`` (checked between files and pages)
+    stops the batch cooperatively; files already finished keep their outputs."""
     results: list[FileResult] = []
     total = len(paths)
     state = {"done": 0}  # pages completed across the whole batch
     cancelled = False
+    budgeted = 0  # cumulative page budget of every file we've started
 
     for idx, path in enumerate(paths):
         name = Path(path).name
@@ -431,6 +438,7 @@ def process_batch(
         if should_cancel and should_cancel():  # stop before starting a new file
             cancelled = True
             break
+        budgeted += unit_counts[idx] if unit_counts else 0
         try:
             results.append(
                 process_file(
@@ -443,7 +451,19 @@ def process_batch(
             break
         except Exception as exc:  # one bad file must not kill the batch
             results.append(FileResult(source_name=name, error=str(exc)))
+            # A failed file emits no "page_done", but it was counted in the total.
+            # Advance the counter past its budget so the bar shows a finished file
+            # instead of stalling on pages that will never report done. max() keeps
+            # the counter monotonic (a prior file may have over-rendered).
+            if unit_counts:
+                state["done"] = max(state["done"], budgeted)
             report_line(f"Failed: {exc}", stage="error")
+        else:
+            # Reconcile any drift between the page budget and what actually
+            # rendered (metadata can over-count), so the bar tracks real progress
+            # across a long batch and still reaches 100% at the end.
+            if unit_counts:
+                state["done"] = max(state["done"], budgeted)
 
     if report and cancelled:
         report(ProgressEvent(

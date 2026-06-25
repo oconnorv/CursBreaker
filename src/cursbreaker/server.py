@@ -446,8 +446,12 @@ def _run_job(job_id, paths, settings, out_dir):
 
         # Page count up front (cheap; same function /api/upload uses) so the bar
         # is page-driven and actually fills. count_content_pages already returns
-        # 1 on any read error, so the sum is always >= the file count.
-        total_units = sum(count_content_pages(p) for p in paths)
+        # 1 on any read error, so the sum is always >= the file count. Keep the
+        # per-file counts too: process_batch reconciles the page counter to this
+        # budget at each file boundary, so a file that errors or under-renders
+        # can't strand the bar below 100% partway through a big batch.
+        unit_counts = [count_content_pages(p) for p in paths]
+        total_units = sum(unit_counts)
         job["total_units"] = total_units
 
         # The worker thread writes these scalar keys and appends to job["log"];
@@ -464,6 +468,7 @@ def _run_job(job_id, paths, settings, out_dir):
 
         results = process_batch(
             paths, provider, settings, out_dir, report, units_total=total_units,
+            unit_counts=unit_counts,
             should_cancel=lambda: bool(job.get("_cancel")),
         )
         job["results"] = [

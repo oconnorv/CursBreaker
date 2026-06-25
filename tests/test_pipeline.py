@@ -418,6 +418,40 @@ def test_progress_batch_prefixes_filenames(png_path, tmp_path):
     assert any(e.stage == "batch_done" for e in events)  # batch cap line
 
 
+def test_failed_file_still_advances_page_counter(png_path, tmp_path):
+    """A file counted in the up-front total but that errors never emits a
+    ``page_done``; the counter must still reconcile to ``done == total`` at the
+    file boundary so the bar reaches 100% instead of freezing partway (the
+    "stuck at 558/830 while the log keeps flowing" bug)."""
+    out = tmp_path / "out"
+    bad = tmp_path / "unreadable.xyz"   # unsupported -> process_file raises
+    bad.write_bytes(b"not an image")
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = []
+    # Budget one page each; only the good file can ever report a page_done.
+    process_batch(
+        [png_path, bad], MockProvider(), settings, out, events.append,
+        units_total=2, unit_counts=[1, 1],
+    )
+    assert any(e.stage == "error" for e in events)   # the bad file is surfaced
+    assert [e.units_done for e in events if e.stage == "page_done"] == [1]
+    # The final event reconciles the counter past the failed file: 2/2, not 1/2.
+    assert events[-1].units_done == 2
+    assert events[-1].units_total == 2
+
+
+def test_page_counter_without_unit_counts_is_unchanged(png_path, tmp_path):
+    """Back-compat: with no ``unit_counts`` the counter only advances on real
+    ``page_done`` events (a failed file leaves the bar short, as before)."""
+    out = tmp_path / "out"
+    bad = tmp_path / "unreadable.xyz"
+    bad.write_bytes(b"not an image")
+    settings = Settings(content_type="handwriting", mode="one_pass")
+    events = []
+    process_batch([png_path, bad], MockProvider(), settings, out, events.append, units_total=2)
+    assert events[-1].units_done == 1  # no reconciliation without the budget
+
+
 def test_progress_default_report_is_optional(png_path, tmp_path):
     # process_file/process_page still work with no reporter passed (back-compat).
     out = tmp_path / "out"
