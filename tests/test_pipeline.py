@@ -553,6 +553,48 @@ def test_disk_full_without_handler_keeps_old_skip_behavior(png_path, tmp_path, m
     assert len(results) == 2 and results[1].error is not None  # bad file recorded, batch went on
 
 
+# --- output-format selection --------------------------------------------- #
+
+def test_outputs_only_hocr_writes_just_hocr(png_path, tmp_path):
+    out = tmp_path / "out"
+    r = process_file(png_path, MockProvider(), Settings(mode="one_pass"), out, outputs={"hocr"})
+    assert r.hocr_name and (out / r.hocr_name).exists()
+    assert r.txt_name is None and r.alto_name is None and r.pdf_name is None
+    assert r.image_names == []
+    assert sorted(p.name for p in out.iterdir()) == [r.hocr_name]  # nothing else written
+
+
+def test_outputs_pdf_only_discards_transient_page_pngs(png_path, tmp_path):
+    out = tmp_path / "out"
+    r = process_file(png_path, MockProvider(), Settings(mode="one_pass"), out, outputs={"pdf"})
+    assert r.pdf_name and (out / r.pdf_name).exists()
+    assert r.image_names == []                 # images weren't requested
+    assert not list(out.glob("*.png"))         # PNGs built the PDF, then were removed
+    assert r.txt_name is None and r.hocr_name is None and r.alto_name is None
+
+
+def test_outputs_pdf_and_images_keeps_pngs(png_path, tmp_path):
+    out = tmp_path / "out"
+    r = process_file(png_path, MockProvider(), Settings(mode="one_pass"), out, outputs={"pdf", "images"})
+    assert r.pdf_name and (out / r.pdf_name).exists()
+    assert r.image_names and all((out / n).exists() for n in r.image_names)
+
+
+def test_outputs_images_only_skips_documents(png_path, tmp_path):
+    out = tmp_path / "out"
+    r = process_file(png_path, MockProvider(), Settings(mode="one_pass"), out, outputs={"images"})
+    assert r.image_names and all((out / n).exists() for n in r.image_names)
+    assert r.txt_name is None and r.hocr_name is None and r.alto_name is None and r.pdf_name is None
+
+
+def test_outputs_empty_means_everything(png_path, tmp_path):
+    out = tmp_path / "out"
+    r = process_file(png_path, MockProvider(), Settings(mode="one_pass"), out, outputs=[])
+    assert r.txt_name and r.hocr_name and r.alto_name and r.pdf_name and r.image_names
+    for n in (r.txt_name, r.hocr_name, r.alto_name, r.pdf_name, *r.image_names):
+        assert (out / n).exists()
+
+
 def test_progress_default_report_is_optional(png_path, tmp_path):
     # process_file/process_page still work with no reporter passed (back-compat).
     out = tmp_path / "out"

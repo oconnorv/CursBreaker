@@ -81,5 +81,34 @@ check("the .txt/.hocr/.pdf links remain", !!resultDiv
   && /Searchable PDF/.test(resultDiv._html), resultDiv && resultDiv._html);
 check("results markup has no PNG download", !!resultDiv && !/Page PNG|PNG p\d/.test(resultDiv._html));
 
+// --- output picker: only produced types stay downloadable ---------------- //
+created.length = 0;
+sandbox.renderResults("job456", {
+  tokens: { calls: 0 },
+  results: [{
+    source_name: "only.tif", n_pages: 2, n_lines: 18, error: null,
+    pdf: null, txt: null, alto: null, hocr: "/hocr",  // only hOCR produced
+    tokens: { total: 0, cost: null, calls: 0 }, images: [],
+  }],
+});
+check("produced type stays enabled (hOCR)", document.getElementById("dl-hocr").disabled === false);
+check("absent type disabled (PDF)", document.getElementById("dl-pdf").disabled === true);
+check("absent type disabled (ALTO)", document.getElementById("dl-alto").disabled === true);
+check("absent type disabled (Text)", document.getElementById("dl-txt").disabled === true);
+check("absent type unchecked (PDF)", document.getElementById("dl-pdf").checked === false);
+// Result markup links only the produced format — no broken href="null".
+const onlyDiv = created.find((e) => e.tagName === "div" && /class="links"/.test(e._html));
+check("hOCR-only result links just hOCR", !!onlyDiv && /Download \.hocr/.test(onlyDiv._html)
+  && !/Download \.txt/.test(onlyDiv._html) && !/ALTO/.test(onlyDiv._html) && !/Searchable PDF/.test(onlyDiv._html),
+  onlyDiv && onlyDiv._html);
+check("no broken null hrefs anywhere", !created.some((e) => /href="null"/.test(e._html || "")));
+
+// --- selectedOutputs reads the pre-batch pickers ------------------------- //
+document.getElementById("out-hocr").checked = true;
+document.getElementById("out-pdf").checked = true;
+check("selectedOutputs returns only ticked formats",
+  JSON.stringify(sandbox.selectedOutputs()) === JSON.stringify(["hocr", "pdf"]),
+  JSON.stringify(sandbox.selectedOutputs()));
+
 console.log("\n" + (failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"));
 process.exit(failures === 0 ? 0 : 1);

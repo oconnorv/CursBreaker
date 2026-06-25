@@ -452,6 +452,14 @@ function pollStagedPages() {
 }
 
 // ---- processing --------------------------------------------------------- //
+
+// Output kinds ticked in the Documents card; [] means "create everything" (the
+// server treats an empty/omitted list as all formats).
+const OUTPUT_FORMAT_IDS = ["txt", "hocr", "alto", "pdf", "images"];
+function selectedOutputs() {
+  return OUTPUT_FORMAT_IDS.filter((t) => { const el = $("out-" + t); return el && el.checked; });
+}
+
 async function transcribe() {
   if (!staged.length) return;
   // Drop any leftover error (e.g. a prior "no API key") so it can't linger
@@ -475,7 +483,10 @@ async function transcribe() {
   $("results-card").hidden = true;
   $("results").innerHTML = "";
   try {
-    const { job_id } = await api("POST", "/api/process", { file_ids: staged.map((f) => f.id) });
+    const { job_id } = await api("POST", "/api/process", {
+      file_ids: staged.map((f) => f.id),
+      outputs: selectedOutputs(),
+    });
     activeJobId = job_id;
     const cancel = $("cancel-job");
     if (cancel) { cancel.hidden = false; cancel.disabled = false; cancel.textContent = "Cancel"; }
@@ -698,6 +709,20 @@ function renderResults(jobId, job) {
     const types = selectedDownloadTypes();
     if (types.length) triggerDownload(`/api/download/${jobId}.zip?types=${types.join(",")}`);
   };
+  // Only offer download types this run actually produced (the output picker may
+  // have skipped some), so the user can't request an empty zip.
+  const present = new Set();
+  for (const r of (job.results || [])) {
+    for (const t of DOWNLOAD_TYPES) if (r[t]) present.add(t);
+  }
+  for (const t of DOWNLOAD_TYPES) {
+    const cb = $("dl-" + t);
+    if (!cb) continue;
+    const has = present.has(t);
+    cb.disabled = !has;
+    if (!has) cb.checked = false;
+    if (cb.parentElement) cb.parentElement.classList.toggle("dl-unavailable", !has);
+  }
   syncDownloadSelected();
   // Per-job token total with the transparent dollar disclaimer.
   const totals = $("results-tokens");
@@ -725,12 +750,17 @@ function renderResults(jobId, job) {
       html += `<p class="err">Error: ${escapeHtml(r.error)}</p>`;
       div.innerHTML = html;
     } else {
+      // Only link the formats this run actually produced (the output picker may
+      // have skipped some) — otherwise the href would be a broken "null".
       const pdfLink = r.pdf ? `<a class="btn small primary" href="${r.pdf}">Searchable PDF</a>` : "";
+      const txtLink = r.txt ? `<a class="btn small" href="${r.txt}">Download .txt</a>` : "";
+      const hocrLink = r.hocr ? `<a class="btn small" href="${r.hocr}">Download .hocr</a>` : "";
+      const altoLink = r.alto ? `<a class="btn small" href="${r.alto}">Download ALTO (.xml)</a>` : "";
       html += `<div class="links">
         ${pdfLink}
-        <a class="btn small" href="${r.txt}">Download .txt</a>
-        <a class="btn small" href="${r.hocr}">Download .hocr</a>
-        <a class="btn small" href="${r.alto}">Download ALTO (.xml)</a></div>`;
+        ${txtLink}
+        ${hocrLink}
+        ${altoLink}</div>`;
       div.innerHTML = html;
       const links = div.querySelector(".links");
       r.images.forEach((im, i) => {

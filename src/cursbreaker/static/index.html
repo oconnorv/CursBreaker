@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=27" />
+  <link rel="stylesheet" href="/static/styles.css?v=28" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -147,6 +147,20 @@
       <!-- role="list" is explicit: list-style:none drops the implicit list
            role in Safari/VoiceOver, which would otherwise stop announcing it. -->
       <ul id="staged" class="staged" role="list" aria-label="Files ready to transcribe"></ul>
+
+      <!-- Pick which output kinds to create before running. Leaving every box
+           unchecked creates all of them (the original behaviour); checking some
+           creates only those, which saves work and disk space on big batches —
+           the searchable PDFs and page images are the heavy ones. -->
+      <fieldset class="output-formats">
+        <legend>Output formats <span class="muted">(leave all unchecked to create every format)</span></legend>
+        <label><input type="checkbox" id="out-txt" value="txt" /> Text</label>
+        <label><input type="checkbox" id="out-hocr" value="hocr" /> hOCR</label>
+        <label><input type="checkbox" id="out-alto" value="alto" /> ALTO</label>
+        <label><input type="checkbox" id="out-pdf" value="pdf" /> Searchable PDF</label>
+        <label><input type="checkbox" id="out-images" value="images" /> Page images</label>
+      </fieldset>
+
       <div class="actions">
         <button id="transcribe" class="btn primary" type="button" disabled>Transcribe</button>
         <button id="estimate" class="btn" type="button" disabled>Estimate cost</button>
@@ -255,6 +269,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=28"></script>
+  <script src="/static/app.js?v=29"></script>
 </body>
 </html>
