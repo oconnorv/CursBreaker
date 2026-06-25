@@ -8,6 +8,7 @@ re-rendered to PNG at the dimensions the bounding boxes refer to, so the
 
 from __future__ import annotations
 
+import errno
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,28 @@ CancelCheck = Callable[[], bool]
 class JobCancelled(Exception):
     """Raised inside ``process_file`` when ``should_cancel()`` turns true, so the
     partially-processed file is abandoned cleanly (not recorded as an error)."""
+
+
+# Invoked when a file's output write fails because the disk is full. It BLOCKS
+# until the user decides, then returns "resume" (space freed -> retry the file)
+# or "end" (stop now, keep the files already saved). A full disk is a whole-job
+# condition, not one bad file, so the batch must pause -- not silently skip every
+# remaining file (writing nothing, still spending API tokens) as it used to.
+DiskFullHandler = Callable[[], str]
+
+
+def _is_disk_full(exc: BaseException) -> bool:
+    """True if ``exc`` -- or any error it wraps -- is an ENOSPC "no space left on
+    device". Output writes (page PNGs, txt/hOCR/ALTO/PDF) can surface it from deep
+    inside Pillow/pikepdf, so walk the ``__cause__``/``__context__`` chain."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, OSError) and cur.errno == errno.ENOSPC:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
 
 # Pre-flight output-token estimate, per page, as a LOW-HIGH range. Output is
 # genuinely unpredictable before a page is read: it scales with how much text is
@@ -399,6 +422,7 @@ def process_batch(
     units_total: int = 0,
     unit_counts: list[int] | None = None,
     should_cancel: CancelCheck | None = None,
+    on_disk_full: DiskFullHandler | None = None,
 ) -> list[FileResult]:
     """Transcribe each file, emitting a ``ProgressEvent`` per step to ``report``.
 
@@ -411,12 +435,16 @@ def process_batch(
     being a counter frozen at e.g. 558/830 while the log keeps flowing through the
     remaining files). Messages are prefixed with the filename only when the batch
     has more than one file. ``should_cancel`` (checked between files and pages)
-    stops the batch cooperatively; files already finished keep their outputs."""
+    stops the batch cooperatively; files already finished keep their outputs.
+    ``on_disk_full`` (if given) is called when a write fails for lack of disk
+    space: it blocks until the user resumes (retry the file) or stops, so the
+    batch doesn't burn through the rest of the files saving nothing."""
     results: list[FileResult] = []
     total = len(paths)
     state = {"done": 0}  # pages completed across the whole batch
     cancelled = False
-    budgeted = 0  # cumulative page budget of every file we've started
+    ended = False        # user chose "stop" at a disk-full pause: finish early
+    budgeted = 0         # cumulative page budget of every file we've started
 
     for idx, path in enumerate(paths):
         name = Path(path).name
@@ -439,37 +467,70 @@ def process_batch(
             cancelled = True
             break
         budgeted += unit_counts[idx] if unit_counts else 0
-        try:
-            results.append(
-                process_file(
-                    path, provider, settings, out_dir,
-                    report=report_line, should_cancel=should_cancel,
-                )
-            )
-        except JobCancelled:  # cancelled mid-file: drop the partial file, stop
-            cancelled = True
-            break
-        except Exception as exc:  # one bad file must not kill the batch
-            results.append(FileResult(source_name=name, error=str(exc)))
-            # A failed file emits no "page_done", but it was counted in the total.
-            # Advance the counter past its budget so the bar shows a finished file
-            # instead of stalling on pages that will never report done. max() keeps
-            # the counter monotonic (a prior file may have over-rendered).
-            if unit_counts:
-                state["done"] = max(state["done"], budgeted)
-            report_line(f"Failed: {exc}", stage="error")
-        else:
-            # Reconcile any drift between the page budget and what actually
-            # rendered (metadata can over-count), so the bar tracks real progress
-            # across a long batch and still reaches 100% at the end.
-            if unit_counts:
-                state["done"] = max(state["done"], budgeted)
 
+        while True:  # retry this file if a disk-full pause is resolved by "resume"
+            try:
+                results.append(
+                    process_file(
+                        path, provider, settings, out_dir,
+                        report=report_line, should_cancel=should_cancel,
+                    )
+                )
+            except JobCancelled:  # cancelled mid-file: drop the partial file, stop
+                cancelled = True
+            except Exception as exc:
+                # A full disk affects every remaining file. Don't quietly skip and
+                # march through the rest of the batch saving nothing (and still
+                # spending API tokens): pause, let the user free space and resume,
+                # or stop with what's already saved.
+                if on_disk_full is not None and _is_disk_full(exc):
+                    report_line(
+                        "Paused — no space left on the disk. Free up space, then "
+                        "Resume, or Stop to keep the files already finished.",
+                        stage="paused",
+                    )
+                    if on_disk_full() == "resume":   # blocks until the user decides
+                        report_line(f"Resuming — retrying {name}.", stage="page")
+                        continue                     # re-attempt the same file
+                    ended = True                     # user chose to stop
+                    results.append(
+                        FileResult(source_name=name, error="Not saved — the disk was full.")
+                    )
+                else:
+                    # A non-disk error is one bad file: record it and move on. It
+                    # emits no "page_done" but was counted in the total, so advance
+                    # the counter past its budget (monotonic max) instead of letting
+                    # the bar stall on pages that will never report done.
+                    results.append(FileResult(source_name=name, error=str(exc)))
+                    if unit_counts:
+                        state["done"] = max(state["done"], budgeted)
+                    report_line(f"Failed: {exc}", stage="error")
+            else:
+                # Reconcile any drift between the page budget and what actually
+                # rendered (metadata can over-count), so the bar tracks real
+                # progress across a long batch and still reaches 100% at the end.
+                if unit_counts:
+                    state["done"] = max(state["done"], budgeted)
+            break  # leave the retry loop unless we 'continue'd above
+
+        if cancelled or ended:
+            break
+
+    completed = sum(1 for r in results if r.error is None)
     if report and cancelled:
         report(ProgressEvent(
             message="Cancelled.", stage="cancelled",
             file_index=0, file_total=total,
             file_name=Path(paths[0]).name if paths else "",
+            units_done=state["done"], units_total=units_total,
+        ))
+    elif report and ended:
+        report(ProgressEvent(
+            message=(f"Stopped — out of disk space. {completed} file(s) finished "
+                     "and ready to download."),
+            stage="stopped",
+            file_index=max(0, total - 1), file_total=total,
+            file_name=Path(paths[-1]).name if paths else "",
             units_done=state["done"], units_total=units_total,
         ))
     elif report and total > 1:

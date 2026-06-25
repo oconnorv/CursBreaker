@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=26" />
+  <link rel="stylesheet" href="/static/styles.css?v=27" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -165,6 +165,19 @@
         <div id="progress-bar" class="progress-bar"></div>
       </div>
       <p id="progress-text" class="muted" role="status" aria-live="polite"></p>
+      <!-- Disk-full pause: the worker is blocked (no more files, no API spend)
+           until the user frees space and resumes, or stops with what's saved.
+           role="alert" so it's announced the moment it appears. -->
+      <div id="pause-banner" class="pause-banner key-info warn" role="alert" hidden>
+        <span class="glyph" aria-hidden="true">!</span>
+        <div class="pause-body">
+          <p id="pause-reason" class="pause-reason"></p>
+          <div class="pause-actions">
+            <button id="resume-job" class="btn small primary" type="button">I've freed up space — Resume</button>
+            <button id="stop-job" class="btn small" type="button">Stop &amp; download what's done</button>
+          </div>
+        </div>
+      </div>
       <p id="token-text" class="muted token-text" role="status" aria-live="polite"></p>
       <!-- Append-only activity log. role="log" (not a live region) so the whole
            list isn't re-announced each poll; #activity-live announces just the
@@ -242,6 +255,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=27"></script>
+  <script src="/static/app.js?v=28"></script>
 </body>
 </html>

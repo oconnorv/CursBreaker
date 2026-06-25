@@ -159,5 +159,30 @@ freshDom();
 renderProgress({ status: "error", error: "boom", log: ["x"], total_units: 1, done_units: 0 });
 check("error headline shows the error", el("progress-text").textContent === "Error: boom", el("progress-text").textContent);
 
+// --- Group E: disk-full pause banner ------------------------------------ //
+freshDom();
+// Simulate a stale "Resuming…" button to prove the banner re-enables it.
+el("resume-job").disabled = true; el("resume-job").textContent = "Resuming…";
+renderProgress({ status: "running", paused: true, pause_reason: "No space left on the disk.",
+                 total_units: 830, done_units: 558, log: ["Paused — no space"] });
+check("E1 pause banner shown", el("pause-banner").hidden === false, el("pause-banner").hidden);
+check("E1 pause reason text set", el("pause-reason").textContent === "No space left on the disk.", el("pause-reason").textContent);
+check("E1 paused headline", el("progress-text").textContent === "Paused — no disk space · page 558/830", el("progress-text").textContent);
+check("E1 normal cancel hidden while paused", el("cancel-job").hidden === true, el("cancel-job").hidden);
+check("E1 resume button re-enabled", el("resume-job").disabled === false && el("resume-job").textContent.includes("Resume"), el("resume-job").textContent);
+
+// E2: resumed -> running, not paused -> banner hidden, normal cancel restored.
+renderProgress({ status: "running", paused: false, total_units: 830, done_units: 559, log: ["Resuming"] });
+check("E2 banner hidden after resume", el("pause-banner").hidden === true, el("pause-banner").hidden);
+check("E2 cancel restored after resume", el("cancel-job").hidden === false, el("cancel-job").hidden);
+
+// E3: stopped terminal status -> banner hidden, disk-aware headline counts only saved files.
+freshDom();
+renderProgress({ status: "stopped", total_units: 830, done_units: 558, log: ["Stopped"],
+                 results: [{}, {}, { error: "Not saved — the disk was full." }] });
+check("E3 stopped banner hidden", el("pause-banner").hidden === true, el("pause-banner").hidden);
+check("E3 stopped headline shows saved count",
+  el("progress-text").textContent === "Stopped — out of disk space · 2 file(s) saved", el("progress-text").textContent);
+
 console.log("\n" + (failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"));
 process.exit(failures === 0 ? 0 : 1);

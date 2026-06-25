@@ -543,6 +543,39 @@ def test_append_log_caps_storage_but_counts_total():
     assert job["log_total"] == 10                                  # all 10 counted
 
 
+def test_resume_and_end_release_a_paused_job():
+    """/resume and /end record the action and wake the blocked worker; both are
+    no-ops unless the job is actually paused, and 404 on an unknown job."""
+    import threading
+    from cursbreaker.server import JOBS
+
+    def _paused():
+        return {
+            "status": "running", "paused": True, "pause_reason": "full",
+            "log": [], "log_total": 0,
+            "_resume": threading.Event(), "_resume_action": None,
+        }
+
+    JOBS["jr"] = _paused()
+    assert client.post("/api/jobs/jr/resume").status_code == 200
+    assert JOBS["jr"]["_resume_action"] == "resume" and JOBS["jr"]["_resume"].is_set()
+
+    JOBS["je"] = _paused()
+    assert client.post("/api/jobs/je/end").status_code == 200
+    assert JOBS["je"]["_resume_action"] == "end" and JOBS["je"]["_resume"].is_set()
+
+    # Not paused -> no-op: action stays None, worker isn't signalled.
+    JOBS["jn"] = {**_paused(), "paused": False}
+    client.post("/api/jobs/jn/resume")
+    assert JOBS["jn"]["_resume_action"] is None and not JOBS["jn"]["_resume"].is_set()
+
+    assert client.post("/api/jobs/nope/resume").status_code == 404
+    assert client.post("/api/jobs/nope/end").status_code == 404
+
+    for k in ("jr", "je", "jn"):
+        JOBS.pop(k, None)
+
+
 def test_job_status_exposes_activity_log_and_unit_counters(run_with_mock, pdf_path):
     client.post("/api/settings", json={"mode": "two_pass"})
     with open(pdf_path, "rb") as fh:
