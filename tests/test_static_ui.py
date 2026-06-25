@@ -59,3 +59,10 @@ def test_results_offer_type_filtered_bulk_download():
     for box in ('id="dl-hocr"', 'id="dl-alto"', 'id="dl-pdf"', 'id="dl-txt"'):
         assert box in html, f"missing download checkbox {box}"
     assert 'id="dl-selected"' in html and 'id="zip-link"' in html
+
+
+def test_documents_card_offers_a_local_path_input():
+    """Alongside drag-and-drop upload, the Documents card has a field to stage
+    files already on disk by path (read in place, no copy)."""
+    html = client.get("/").text
+    assert 'id="path-input"' in html and 'id="add-path"' in html

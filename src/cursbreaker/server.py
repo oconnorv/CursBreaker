@@ -8,6 +8,8 @@ The user's original files are never modified.
 
 from __future__ import annotations
 
+import atexit
+import errno
 import io
 import os
 import shutil
@@ -47,12 +49,41 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="CursBreaker", version=__version__)
 
-# In-memory state for this single-user local session.
-_BASE = Path(tempfile.mkdtemp(prefix="cursbreaker_"))
+# Staged uploads and per-job outputs live under one temp workspace. Override its
+# location with CURSBREAKER_WORK_DIR (e.g. a roomier drive) when the default temp
+# dir -- often a small or full C: on Windows -- can't hold a large batch.
+_WORK_PARENT = os.environ.get("CURSBREAKER_WORK_DIR") or None  # None -> system temp
+if _WORK_PARENT:
+    os.makedirs(_WORK_PARENT, exist_ok=True)
+_BASE = Path(tempfile.mkdtemp(prefix="cursbreaker_", dir=_WORK_PARENT))
 STAGE_DIR = _BASE / "stage"
 JOBS_DIR = _BASE / "jobs"
 STAGE_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _cleanup_workspace() -> None:
+    """Remove this session's temp workspace (staged uploads + job outputs). Best
+    effort; registered with atexit and run on the hard-exit path, so a normal quit
+    doesn't leave gigabytes of copied images behind in temp."""
+    shutil.rmtree(_BASE, ignore_errors=True)
+
+
+def sweep_stale_workspaces() -> None:
+    """Delete leftover cursbreaker_* workspaces from earlier runs that exited
+    without cleaning up -- e.g. an OS OOM-kill or power loss, where neither atexit
+    nor the hard-exit hook gets to run. Best effort and scoped to our own temp
+    prefix; the live session's dir is skipped, and any dir with files still open
+    (a concurrent instance on Windows) simply fails to delete and is left alone.
+
+    Called once at launch (from __main__), never at import -- so parallel test
+    workers, each with their own workspace, never sweep one another."""
+    for d in _BASE.parent.glob("cursbreaker_*"):
+        if d != _BASE and d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+
+
+atexit.register(_cleanup_workspace)
 
 STAGED: dict[str, Path] = {}
 JOBS: dict[str, dict] = {}
@@ -204,8 +235,21 @@ def upload(files: list[UploadFile] = File(...)):
         sub.mkdir(parents=True, exist_ok=True)
         dest = sub / Path(f.filename).name
         f.file.seek(0)
-        with dest.open("wb") as out:
-            shutil.copyfileobj(f.file, out, _UPLOAD_CHUNK)
+        try:
+            with dest.open("wb") as out:
+                shutil.copyfileobj(f.file, out, _UPLOAD_CHUNK)
+        except OSError as exc:
+            # Roll back this file's partial write and report cleanly instead of a
+            # 500 + traceback. Running out of disk is the common case on a big batch.
+            shutil.rmtree(sub, ignore_errors=True)
+            if exc.errno == errno.ENOSPC:
+                raise HTTPException(
+                    507,
+                    "Ran out of disk space while staging uploads. Free up space on "
+                    "the drive holding the temp folder — or set CURSBREAKER_WORK_DIR "
+                    "to a drive with more room — then try again.",
+                ) from exc
+            raise HTTPException(500, f"Could not save upload: {exc.strerror or exc}") from exc
         STAGED[file_id] = dest
         staged.append({"id": file_id, "name": Path(f.filename).name, "pages": None})
     if not staged:
@@ -226,6 +270,57 @@ def staged_pages():
     Transcribe/Estimate, which work the moment files are staged) on the scan."""
     with _STAGED_PAGES_LOCK:
         return {"pages": dict(STAGED_PAGES)}
+
+
+class StagePathRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/stage-path")
+def stage_path(req: StagePathRequest):
+    """Stage files that are already on this machine *by path, without copying
+    them*: STAGED points at the originals and the pipeline reads them in place
+    (the user's files are never modified). A folder stages the supported files
+    directly inside it. This skips both the duplicate disk copy and the HTTP
+    upload, so a big local batch is added instantly."""
+    raw = (req.path or "").strip().strip('"')
+    if not raw:
+        raise HTTPException(400, "Enter a file or folder path.")
+    try:
+        p = Path(raw).expanduser()
+        exists = p.exists()
+    except OSError as exc:
+        raise HTTPException(400, f"That path can't be read: {exc.strerror or exc}")
+    if not exists:
+        raise HTTPException(404, f"Path not found: {raw}")
+
+    if p.is_dir():
+        candidates = sorted(c for c in p.iterdir() if c.is_file())
+    elif p.is_file():
+        candidates = [p]
+    else:
+        raise HTTPException(400, "That path is neither a file nor a folder.")
+
+    staged, skipped = [], 0
+    for c in candidates:
+        if not is_supported(c.name):
+            skipped += 1
+            continue
+        file_id = uuid.uuid4().hex
+        STAGED[file_id] = c  # the original on disk -- read in place, never copied
+        staged.append({"id": file_id, "name": c.name, "pages": None})
+    if not staged:
+        where = "that folder" if p.is_dir() else "that file"
+        raise HTTPException(
+            400, f"No supported files in {where}. Allowed: {sorted(SUPPORTED_EXT)}"
+        )
+
+    new_ids = [s["id"] for s in staged]
+    with _STAGED_PAGES_LOCK:
+        for fid in new_ids:
+            STAGED_PAGES[fid] = None
+    threading.Thread(target=_count_pages_bg, args=(new_ids,), daemon=True).start()
+    return {"files": staged, "skipped": skipped}
 
 
 class ProcessRequest(BaseModel):
@@ -646,7 +741,12 @@ def _quit_process() -> None:
         signal.raise_signal(signal.SIGINT)
     except Exception:
         pass
-    threading.Timer(2.5, lambda: os._exit(0)).start()
+
+    def _hard_exit() -> None:
+        _cleanup_workspace()  # os._exit skips atexit, so drop the workspace here
+        os._exit(0)
+
+    threading.Timer(2.5, _hard_exit).start()
 
 
 def start_autoshutdown(

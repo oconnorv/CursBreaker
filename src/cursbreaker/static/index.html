@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=25" />
+  <link rel="stylesheet" href="/static/styles.css?v=26" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -131,6 +131,19 @@
         <button class="btn" id="browse" type="button">Browse files</button>
         <input type="file" id="file-input" multiple accept=".tif,.tiff,.jpg,.jpeg,.png,.gif,.pdf" hidden />
       </div>
+
+      <!-- Big local batches: point at files already on this computer instead of
+           uploading copies. The server reads them in place (never modified). -->
+      <div class="path-add">
+        <label for="path-input">…or use files already on this computer</label>
+        <div class="path-add-row">
+          <input type="text" id="path-input" class="path-input" autocomplete="off"
+                 spellcheck="false" placeholder="Paste a folder or file path, e.g. D:\Scans\Ledger1887" />
+          <button id="add-path" class="btn" type="button">Add from path</button>
+        </div>
+        <p class="hint">In File Explorer, Shift-right-click the folder &rarr; &ldquo;Copy as path&rdquo;, then paste here. Files are read in place &mdash; not copied or modified.</p>
+      </div>
+
       <!-- role="list" is explicit: list-style:none drops the implicit list
            role in Safari/VoiceOver, which would otherwise stop announcing it. -->
       <ul id="staged" class="staged" role="list" aria-label="Files ready to transcribe"></ul>
@@ -229,6 +242,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=26"></script>
+  <script src="/static/app.js?v=27"></script>
 </body>
 </html>

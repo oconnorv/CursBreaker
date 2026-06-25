@@ -597,6 +597,107 @@ def test_cancel_unknown_job_is_404():
     assert client.post("/api/jobs/does-not-exist/cancel").status_code == 404
 
 
+def test_upload_out_of_space_is_clean_507_not_500(monkeypatch, png_path):
+    # Disk-full mid-write used to bubble up as a 500 + traceback; it should be a
+    # clean 507 with a helpful message, and the partial file must be rolled back.
+    import errno
+
+    from cursbreaker import server
+
+    def boom(src, dst, length=0):  # simulate the disk filling during the copy
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    before = len(list(server.STAGE_DIR.iterdir()))
+    monkeypatch.setattr(server.shutil, "copyfileobj", boom)
+    with open(png_path, "rb") as fh:
+        r = client.post("/api/upload", files={"files": ("sample.png", fh, "image/png")})
+    assert r.status_code == 507
+    assert "disk space" in r.json()["detail"].lower()
+    assert len(list(server.STAGE_DIR.iterdir())) == before  # no half-written dir left
+
+
+def test_sweep_removes_stale_workspaces_but_keeps_current_and_others(tmp_path, monkeypatch):
+    from cursbreaker import server
+
+    current = tmp_path / "cursbreaker_current"
+    current.mkdir()
+    stale = tmp_path / "cursbreaker_old"
+    (stale / "stage").mkdir(parents=True)
+    (stale / "stage" / "big.bin").write_bytes(b"x" * 1024)
+    unrelated = tmp_path / "someone_elses_dir"
+    unrelated.mkdir()
+
+    monkeypatch.setattr(server, "_BASE", current)
+    server.sweep_stale_workspaces()
+
+    assert current.exists()        # the live session is kept
+    assert not stale.exists()      # a stale cursbreaker_* workspace is reclaimed
+    assert unrelated.exists()      # unrelated temp dirs are never touched
+
+
+def test_cleanup_workspace_removes_the_session_dir(tmp_path, monkeypatch):
+    from cursbreaker import server
+
+    base = tmp_path / "cursbreaker_session"
+    (base / "jobs").mkdir(parents=True)
+    (base / "jobs" / "out.txt").write_text("data")
+    monkeypatch.setattr(server, "_BASE", base)
+    server._cleanup_workspace()
+    assert not base.exists()
+
+
+def test_stage_path_reads_files_in_place_without_copying(tmp_path, png_path):
+    # Pointing at a folder stages the originals BY PATH -- no copy into the
+    # server's workspace -- and skips unsupported files.
+    from cursbreaker import server
+
+    book = tmp_path / "book"
+    book.mkdir()
+    data = open(png_path, "rb").read()
+    (book / "page1.png").write_bytes(data)
+    (book / "page2.png").write_bytes(data)
+    (book / "notes.txt").write_text("not an image")
+
+    r = client.post("/api/stage-path", json={"path": str(book)})
+    assert r.status_code == 200
+    body = r.json()
+    assert {f["name"] for f in body["files"]} == {"page1.png", "page2.png"}
+    assert body["skipped"] == 1
+    for f in body["files"]:
+        staged = server.STAGED[f["id"]]
+        assert staged.parent == book                   # the original location
+        assert server.STAGE_DIR not in staged.parents  # not a copy in our temp
+
+
+def test_stage_path_accepts_a_single_file(png_path):
+    r = client.post("/api/stage-path", json={"path": str(png_path)})
+    assert r.status_code == 200
+    assert len(r.json()["files"]) == 1
+
+
+def test_stage_path_strips_windows_copy_as_path_quotes(png_path):
+    # Windows "Copy as path" wraps the path in double quotes.
+    r = client.post("/api/stage-path", json={"path": f'"{png_path}"'})
+    assert r.status_code == 200
+    assert len(r.json()["files"]) == 1
+
+
+def test_stage_path_missing_is_404(tmp_path):
+    r = client.post("/api/stage-path", json={"path": str(tmp_path / "nope")})
+    assert r.status_code == 404
+
+
+def test_stage_path_empty_is_400():
+    assert client.post("/api/stage-path", json={"path": "   "}).status_code == 400
+
+
+def test_stage_path_folder_without_supported_files_is_400(tmp_path):
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "a.txt").write_text("x")
+    assert client.post("/api/stage-path", json={"path": str(d)}).status_code == 400
+
+
 def test_estimate_not_billable_for_printed_only(png_path):
     # Printed-only runs locally (Tesseract), so there's no Gemini token cost.
     client.post("/api/settings", json={"content_type": "text"})

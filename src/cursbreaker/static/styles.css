@@ -265,6 +265,13 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 }
 .dropzone.drag { border-color: var(--link); background: rgba(124,92,255,.10); }
 .dropzone p { margin: 4px 0; }
+
+/* Add-by-path: a labelled field + button under the dropzone for staging files
+   that already live on this machine (read in place, never copied). */
+.path-add { margin-top: 14px; }
+.path-add > label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.path-add-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.path-input { flex: 1 1 320px; min-width: 0; }
 .muted { color: var(--muted); font-size: 13px; }
 
 /* Staged files render as one bounded, scrollable panel rather than a tower of
