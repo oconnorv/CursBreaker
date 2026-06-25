@@ -646,6 +646,58 @@ def test_cleanup_workspace_removes_the_session_dir(tmp_path, monkeypatch):
     assert not base.exists()
 
 
+def test_stage_path_reads_files_in_place_without_copying(tmp_path, png_path):
+    # Pointing at a folder stages the originals BY PATH -- no copy into the
+    # server's workspace -- and skips unsupported files.
+    from cursbreaker import server
+
+    book = tmp_path / "book"
+    book.mkdir()
+    data = open(png_path, "rb").read()
+    (book / "page1.png").write_bytes(data)
+    (book / "page2.png").write_bytes(data)
+    (book / "notes.txt").write_text("not an image")
+
+    r = client.post("/api/stage-path", json={"path": str(book)})
+    assert r.status_code == 200
+    body = r.json()
+    assert {f["name"] for f in body["files"]} == {"page1.png", "page2.png"}
+    assert body["skipped"] == 1
+    for f in body["files"]:
+        staged = server.STAGED[f["id"]]
+        assert staged.parent == book                   # the original location
+        assert server.STAGE_DIR not in staged.parents  # not a copy in our temp
+
+
+def test_stage_path_accepts_a_single_file(png_path):
+    r = client.post("/api/stage-path", json={"path": str(png_path)})
+    assert r.status_code == 200
+    assert len(r.json()["files"]) == 1
+
+
+def test_stage_path_strips_windows_copy_as_path_quotes(png_path):
+    # Windows "Copy as path" wraps the path in double quotes.
+    r = client.post("/api/stage-path", json={"path": f'"{png_path}"'})
+    assert r.status_code == 200
+    assert len(r.json()["files"]) == 1
+
+
+def test_stage_path_missing_is_404(tmp_path):
+    r = client.post("/api/stage-path", json={"path": str(tmp_path / "nope")})
+    assert r.status_code == 404
+
+
+def test_stage_path_empty_is_400():
+    assert client.post("/api/stage-path", json={"path": "   "}).status_code == 400
+
+
+def test_stage_path_folder_without_supported_files_is_400(tmp_path):
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "a.txt").write_text("x")
+    assert client.post("/api/stage-path", json={"path": str(d)}).status_code == 400
+
+
 def test_estimate_not_billable_for_printed_only(png_path):
     # Printed-only runs locally (Tesseract), so there's no Gemini token cost.
     client.post("/api/settings", json={"content_type": "text"})

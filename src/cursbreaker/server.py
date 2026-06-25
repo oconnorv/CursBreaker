@@ -272,6 +272,57 @@ def staged_pages():
         return {"pages": dict(STAGED_PAGES)}
 
 
+class StagePathRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/stage-path")
+def stage_path(req: StagePathRequest):
+    """Stage files that are already on this machine *by path, without copying
+    them*: STAGED points at the originals and the pipeline reads them in place
+    (the user's files are never modified). A folder stages the supported files
+    directly inside it. This skips both the duplicate disk copy and the HTTP
+    upload, so a big local batch is added instantly."""
+    raw = (req.path or "").strip().strip('"')
+    if not raw:
+        raise HTTPException(400, "Enter a file or folder path.")
+    try:
+        p = Path(raw).expanduser()
+        exists = p.exists()
+    except OSError as exc:
+        raise HTTPException(400, f"That path can't be read: {exc.strerror or exc}")
+    if not exists:
+        raise HTTPException(404, f"Path not found: {raw}")
+
+    if p.is_dir():
+        candidates = sorted(c for c in p.iterdir() if c.is_file())
+    elif p.is_file():
+        candidates = [p]
+    else:
+        raise HTTPException(400, "That path is neither a file nor a folder.")
+
+    staged, skipped = [], 0
+    for c in candidates:
+        if not is_supported(c.name):
+            skipped += 1
+            continue
+        file_id = uuid.uuid4().hex
+        STAGED[file_id] = c  # the original on disk -- read in place, never copied
+        staged.append({"id": file_id, "name": c.name, "pages": None})
+    if not staged:
+        where = "that folder" if p.is_dir() else "that file"
+        raise HTTPException(
+            400, f"No supported files in {where}. Allowed: {sorted(SUPPORTED_EXT)}"
+        )
+
+    new_ids = [s["id"] for s in staged]
+    with _STAGED_PAGES_LOCK:
+        for fid in new_ids:
+            STAGED_PAGES[fid] = None
+    threading.Thread(target=_count_pages_bg, args=(new_ids,), daemon=True).start()
+    return {"files": staged, "skipped": skipped}
+
+
 class ProcessRequest(BaseModel):
     file_ids: list[str]
     mode: str | None = None

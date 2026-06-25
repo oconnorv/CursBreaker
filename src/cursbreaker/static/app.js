@@ -853,6 +853,33 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Stage files already on this machine by path -- the server reads them in place,
+// no copy and no upload. Complements drag-and-drop for big local batches.
+async function addFromPath() {
+  const input = $("path-input");
+  const path = (input.value || "").trim();
+  const note = $("action-note");
+  if (!path) { input.focus(); return; }
+  const btn = $("add-path");
+  btn.disabled = true;
+  note.textContent = "Reading files from that location…";
+  try {
+    const data = await api("POST", "/api/stage-path", { path });
+    const accepted = (data && data.files) || [];
+    staged.push(...accepted);
+    renderStaged();
+    input.value = "";
+    const skip = data && data.skipped ? ` · skipped ${data.skipped} unsupported file(s)` : "";
+    note.textContent = stagedStatus() + skip;
+    announce(`${accepted.length} file(s) added. ${stagedStatus()}`);
+    pollStagedPages();   // fill the page-count pills, same as an upload
+  } catch (e) {
+    note.textContent = "Couldn't add from path: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function wire() {
   $("save-key").onclick = () => {
     const hadKey = $("api_key").value.trim() !== "";
@@ -885,6 +912,11 @@ function wire() {
   const dz = $("dropzone");
   $("browse").onclick = () => $("file-input").click();
   $("file-input").addEventListener("change", (e) => uploadFiles(e.target.files));
+  // Add files already on disk by path (no upload, no copy).
+  $("add-path").onclick = addFromPath;
+  $("path-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addFromPath(); }
+  });
   dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
   dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
   dz.addEventListener("drop", (e) => {
