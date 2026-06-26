@@ -71,12 +71,12 @@ const check = (name, cond, extra) => {
 };
 
 const { planUploadBatches, formatBytes, uploadStatusText, isSupportedFile,
-        pagesLabel, pendingPageCounts, applyStagedPages } = sandbox;
+        stagedStatus, pendingPageCounts, applyStagedPages } = sandbox;
 check("planUploadBatches is exported", typeof planUploadBatches === "function");
 check("formatBytes is exported", typeof formatBytes === "function");
 check("uploadStatusText is exported", typeof uploadStatusText === "function");
 check("isSupportedFile is exported", typeof isSupportedFile === "function");
-check("pagesLabel is exported", typeof pagesLabel === "function");
+check("stagedStatus is exported", typeof stagedStatus === "function");
 check("pendingPageCounts is exported", typeof pendingPageCounts === "function");
 check("applyStagedPages is exported", typeof applyStagedPages === "function");
 
@@ -136,11 +136,14 @@ check("saving still reports files", s.includes("4/10 file(s) ready"), s);
 s = uploadStatusText({ sentBytes: 0, totalBytes: 0, filesDone: 0, filesTotal: 0, saving: false });
 check("zero totals don't divide-by-zero", s === "Uploading… 0%", s);
 
-// --- Group D: lazy page counts ------------------------------------------- //
-check("pagesLabel pending -> counting…", pagesLabel(null) === "counting…", pagesLabel(null));
-check("pagesLabel undefined -> counting…", pagesLabel(undefined) === "counting…", pagesLabel(undefined));
-check("pagesLabel number -> N page(s)", pagesLabel(3) === "3 page(s)", pagesLabel(3));
-check("pagesLabel zero is a real count", pagesLabel(0) === "0 page(s)", pagesLabel(0));
+// --- Group D: lazy page counts + aggregate summary ----------------------- //
+check("stagedStatus empty -> ''", stagedStatus([]) === "", JSON.stringify(stagedStatus([])));
+check("stagedStatus pending -> file count only (no pages yet)",
+  stagedStatus([{ pages: null }, { pages: 2 }]) === "2 file(s) ready",
+  stagedStatus([{ pages: null }, { pages: 2 }]));
+check("stagedStatus complete -> appends the total pages",
+  stagedStatus([{ pages: 2 }, { pages: 3 }]) === "2 file(s) ready · 5 page(s)",
+  stagedStatus([{ pages: 2 }, { pages: 3 }]));
 
 const list = [{ id: "a", pages: null }, { id: "b", pages: 2 }, { id: "c", pages: null }];
 check("pendingPageCounts true when any null", pendingPageCounts(list) === true);
