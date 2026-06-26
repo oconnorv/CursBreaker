@@ -842,7 +842,12 @@ def start_autoshutdown(
     _AUTOSHUTDOWN_STARTED = True
     _SHUTDOWN_GRACE = grace_seconds
     _SHUTDOWN_POLL = poll_seconds
-    _LAST_PING_AT = time.time()  # initial grace until the first browser ping
+    # Don't arm the countdown yet -- leave the last-seen time unset until a
+    # browser actually pings. Otherwise a failed browser-open (no tab ever
+    # connects) would quietly quit the server ~grace seconds after launch, before
+    # the user can open the printed URL by hand. _should_shutdown treats None as
+    # "stay up", so the server waits indefinitely for the first connection.
+    _LAST_PING_AT = None
 
     def loop():
         while True:

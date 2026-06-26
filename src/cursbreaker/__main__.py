@@ -3,8 +3,45 @@
 from __future__ import annotations
 
 import argparse
+import socket
 import threading
+import time
 import webbrowser
+
+
+def _wait_until_serving(host: str, port: int, timeout: float = 30.0) -> bool:
+    """Block until the server accepts a TCP connection, or ``timeout`` passes.
+
+    Returns True once it's listening. Opening the browser on a blind timer raced
+    server startup -- on a slower machine the tab hit a dead port and never
+    became usable -- so we wait for the port to actually answer first."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+def _open_browser_when_ready(url: str, host: str, port: int) -> None:
+    """Open the app once the server is actually up. If that fails (no default
+    browser, a headless/SSH session, an odd webbrowser setup), say so and show
+    the URL so the app stays usable by hand -- the previous fire-and-forget
+    ``webbrowser.open`` swallowed every failure, leaving a blank, silent app."""
+    if not _wait_until_serving(host, port):
+        return  # server never came up; the foreground error already explains why
+    try:
+        opened = webbrowser.open(url, new=2)
+    except Exception:
+        opened = False
+    if not opened:
+        print(
+            "\nCouldn't open a browser automatically. "
+            f"Open this address yourself:\n    {url}\n",
+            flush=True,
+        )
 
 
 def main() -> None:
@@ -32,9 +69,16 @@ def main() -> None:
     # or OS kill leaves its temp workspace (copied uploads + outputs) behind.
     sweep_stale_workspaces()
 
-    url = f"http://{args.host}:{args.port}/"
+    # A bind-all host isn't browseable; point the tab (and the printed URL) at
+    # loopback instead.
+    browse_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    url = f"http://{browse_host}:{args.port}/"
     if not args.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(url, browse_host, args.port),
+            daemon=True,
+        ).start()
 
     if not args.keep_alive:
         start_autoshutdown()
