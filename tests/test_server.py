@@ -399,6 +399,25 @@ def test_should_shutdown_predicate():
     assert _should_shutdown(50, 10, now=100, jobs_running=True) is False
 
 
+def test_autoshutdown_waits_for_first_ping_before_arming(monkeypatch):
+    """A failed browser-open means no tab ever connects; the watchdog must not
+    quit the server on its own before then, or the user can never reach the
+    printed URL. start_autoshutdown leaves the last-seen time unset until a real
+    ping lands (None -> _should_shutdown stays False)."""
+    from cursbreaker import server
+
+    class _StubThread:  # don't spawn a real watchdog in the test
+        def __init__(self, *a, **k): pass
+        def start(self): pass
+
+    monkeypatch.setattr(server, "_AUTOSHUTDOWN_STARTED", False)
+    monkeypatch.setattr(server, "_LAST_PING_AT", 1234.0)  # stale value to be cleared
+    monkeypatch.setattr(server.threading, "Thread", _StubThread)
+    server.start_autoshutdown(grace_seconds=1, poll_seconds=1)
+    assert server._LAST_PING_AT is None
+    assert server._should_shutdown(server._LAST_PING_AT, 1, now=1_000_000) is False
+
+
 def _make_access_record(status: int) -> "logging.LogRecord":
     import logging
     return logging.LogRecord(
