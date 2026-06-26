@@ -365,15 +365,16 @@ async function uploadFiles(fileList) {
 
 // The action note doubles as a transient status/error line. This is its
 // resting state -- a summary of what's staged -- restored whenever a transient
-// message (e.g. a prior "no API key" error) should be cleared.
-function stagedStatus() {
-  return staged.length ? `${staged.length} file(s) ready` : "";
-}
-
-// Page counts arrive after staging (computed lazily server-side), so a freshly
-// staged file shows "counting…" until its number lands.
-function pagesLabel(pages) {
-  return (pages === null || pages === undefined) ? "counting…" : `${pages} page(s)`;
+// message (e.g. a prior "no API key" error) should be cleared. The total page
+// count is appended once every staged file has been counted (it's computed in
+// the background, server-side); until then we show just the file count, so the
+// number simply appears when ready rather than churning per file.
+function stagedStatus(list = staged) {
+  if (!list.length) return "";
+  const base = `${list.length} file(s) ready`;
+  if (pendingPageCounts(list)) return base;
+  const pages = list.reduce((n, f) => n + (f.pages || 0), 0);
+  return `${base} · ${pages.toLocaleString()} page(s)`;
 }
 
 function renderStaged() {
@@ -381,8 +382,7 @@ function renderStaged() {
   ul.innerHTML = "";
   for (const f of staged) {
     const li = document.createElement("li");
-    li.dataset.id = f.id;  // so refreshStagedPills can update just this row
-    li.innerHTML = `<span>${escapeHtml(f.name)} <span class="pill">${pagesLabel(f.pages)}</span></span>`;
+    li.innerHTML = `<span>${escapeHtml(f.name)}</span>`;
     const rm = document.createElement("button");
     rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
     rm.title = "Remove " + f.name;
@@ -401,9 +401,9 @@ function renderStaged() {
 
 // ---- lazy page counts --------------------------------------------------- //
 // The server counts pages in the background after staging; we poll for the
-// numbers and slot them into the existing rows. This never touches the buttons
-// or action note, so it's safe to run alongside an in-flight transcription
-// (counts are cosmetic; Transcribe/Estimate don't wait on them).
+// numbers and, once every file is counted, append the total to the staged
+// summary (no per-file pills -- the figure just appears). Cosmetic only:
+// Transcribe/Estimate don't wait on it and recount independently.
 let stagedPagesTimer = null;
 
 function pendingPageCounts(list) {
@@ -422,18 +422,6 @@ function applyStagedPages(list, pages) {
   return changed;
 }
 
-// Update only the page-count pills in place (no full re-render, so the Transcribe
-// button's state and the action note are left exactly as they are).
-function refreshStagedPills() {
-  const ul = $("staged");
-  if (!ul) return;
-  for (const f of staged) {
-    const li = ul.querySelector(`li[data-id="${f.id}"]`);
-    const pill = li && li.querySelector(".pill");
-    if (pill) pill.textContent = pagesLabel(f.pages);
-  }
-}
-
 function pollStagedPages() {
   clearInterval(stagedPagesTimer);
   if (!pendingPageCounts(staged)) return;
@@ -442,7 +430,12 @@ function pollStagedPages() {
     let data;
     try { data = await api("GET", "/api/staged-pages"); }
     catch (e) { return; }  // transient; keep polling (the cap still bounds us)
-    if (applyStagedPages(staged, data.pages || {})) refreshStagedPills();
+    // Surface the total only once every file has been counted, and only by
+    // refreshing the resting summary -- don't clobber a transient message or the
+    // estimate mid-count. The number then just appears.
+    if (applyStagedPages(staged, data.pages || {}) && !pendingPageCounts(staged)) {
+      $("action-note").textContent = stagedStatus();
+    }
     // Stop once every file has a number, or after a generous cap so a lost
     // server (e.g. a restart) can't leave us polling forever.
     if (!pendingPageCounts(staged) || ++ticks > 600) clearInterval(stagedPagesTimer);
