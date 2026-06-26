@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=28" />
+  <link rel="stylesheet" href="/static/styles.css?v=29" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -148,17 +148,16 @@
            role in Safari/VoiceOver, which would otherwise stop announcing it. -->
       <ul id="staged" class="staged" role="list" aria-label="Files ready to transcribe"></ul>
 
-      <!-- Pick which output kinds to create before running. Leaving every box
+      <!-- Pick which output formats to create before running. Leaving every box
            unchecked creates all of them (the original behaviour); checking some
-           creates only those, which saves work and disk space on big batches —
-           the searchable PDFs and page images are the heavy ones. -->
+           creates only those, which saves work and disk on big batches — the
+           searchable PDF is the heavy one. -->
       <fieldset class="output-formats">
         <legend>Output formats <span class="muted">(leave all unchecked to create every format)</span></legend>
         <label><input type="checkbox" id="out-txt" value="txt" /> Text</label>
         <label><input type="checkbox" id="out-hocr" value="hocr" /> hOCR</label>
         <label><input type="checkbox" id="out-alto" value="alto" /> ALTO</label>
         <label><input type="checkbox" id="out-pdf" value="pdf" /> Searchable PDF</label>
-        <label><input type="checkbox" id="out-images" value="images" /> Page images</label>
       </fieldset>
 
       <div class="actions">
@@ -204,20 +203,20 @@
       <div class="card-head">
         <h2 id="results-heading" tabindex="-1">Results</h2>
       </div>
-      <!-- Bulk download: tick the file types you want and grab them as one zip,
-           instead of saving hundreds of files one at a time. "Everything" also
-           includes the page images. All routes hit the same streamed zip
-           endpoint, so none can exhaust memory. -->
+      <!-- Bulk download as one zip instead of saving files one at a time. The
+           type picker only appears when a run produced more than one format
+           (renderResults reveals it and hides the formats that weren't made);
+           with a single format it's just the button. Page images are never
+           included. The streamed zip endpoint can't exhaust memory. -->
       <div class="download-bar">
-        <fieldset class="dl-types">
+        <fieldset class="dl-types" id="dl-types-fieldset" hidden>
           <legend>Download by type</legend>
           <label><input type="checkbox" id="dl-hocr" value="hocr" checked /> hOCR</label>
-          <label><input type="checkbox" id="dl-alto" value="alto" /> ALTO</label>
-          <label><input type="checkbox" id="dl-pdf" value="pdf" /> Searchable PDF</label>
-          <label><input type="checkbox" id="dl-txt" value="txt" /> Text</label>
+          <label><input type="checkbox" id="dl-alto" value="alto" checked /> ALTO</label>
+          <label><input type="checkbox" id="dl-pdf" value="pdf" checked /> Searchable PDF</label>
+          <label><input type="checkbox" id="dl-txt" value="txt" checked /> Text</label>
         </fieldset>
-        <button id="dl-selected" class="btn small primary" type="button">Download selected (.zip)</button>
-        <a id="zip-link" class="btn small" href="#">Everything (.zip)</a>
+        <button id="dl-selected" class="btn small primary" type="button">Download (.zip)</button>
       </div>
       <p id="results-tokens" class="muted token-text" hidden></p>
       <div id="results"></div>
@@ -269,6 +268,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=30"></script>
+  <script src="/static/app.js?v=31"></script>
 </body>
 </html>

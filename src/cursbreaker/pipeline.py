@@ -288,9 +288,11 @@ def _tesseract_words_for_line(
     return words
 
 
-# Output kinds a run can write. An empty/unknown selection means "all of them",
-# so the default (and a malformed request) still produces everything.
-OUTPUT_FORMATS = ("txt", "hocr", "alto", "pdf", "images")
+# Document output kinds a run can write. An empty/unknown selection means "all of
+# them", so the default (and a malformed request) still produces everything. Page
+# images are deliberately not here -- they're internal scaffolding (they back the
+# box-overlay Preview and are embedded in the searchable PDF), never a download.
+OUTPUT_FORMATS = ("txt", "hocr", "alto", "pdf")
 
 
 def _wanted_outputs(outputs: Collection[str] | None) -> set[str]:
@@ -314,10 +316,8 @@ def process_file(
     report = report or _noop
     path = Path(path)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Which outputs to write (empty/None -> all). Page PNGs are saved when the
-    # user wants the images *or* the searchable PDF, which embeds them.
+    # Which document outputs to write (empty/None -> all).
     wanted = _wanted_outputs(outputs)
-    save_pngs = "images" in wanted or "pdf" in wanted
 
     # Snapshot the provider's running token total so we can report exactly what
     # *this* file added (the provider is shared across a batch).
@@ -331,7 +331,7 @@ def process_file(
     report(f"{total_pages} page(s) to transcribe", stage="load")
 
     page_results: list[PageResult] = []
-    saved_png_names: list[str] = []  # PNGs actually written (for the PDF + result)
+    image_names: list[str] = []  # page PNGs -- internal scaffolding (preview + PDF)
     pages = iter_pages(
         path,
         preprocess=settings.preprocess,
@@ -359,10 +359,12 @@ def process_file(
                     should_cancel=should_cancel,
                 )
             )
-            if save_pngs:
-                png_name = f"{loaded.output_stem}.png"
-                loaded.image.save(out_dir / png_name)
-                saved_png_names.append(png_name)
+            # Always write the page PNG: it backs the Preview overlay and the
+            # searchable PDF. It is never offered as a download (derivative images
+            # are out of scope), but it lives in the per-job temp workspace.
+            png_name = f"{loaded.output_stem}.png"
+            loaded.image.save(out_dir / png_name)
+            image_names.append(png_name)
             # A page counts as "done" (advancing the bar) once it's transcribed;
             # process_batch increments the global page counter on this stage.
             report(f"Page {i}/{total_pages} done", stage="page_done")
@@ -410,18 +412,8 @@ def process_file(
     if "pdf" in wanted:
         pdf_name = f"{stem}.pdf"
         (out_dir / pdf_name).write_bytes(
-            build_searchable_pdf(page_results, [out_dir / n for n in saved_png_names])
+            build_searchable_pdf(page_results, [out_dir / n for n in image_names])
         )
-
-    # The page PNGs are an output in their own right only when "images" is wanted.
-    # If they were rendered solely to embed in the PDF, delete them now -- they're
-    # the other big disk cost a user trims by not asking for images.
-    if "images" in wanted:
-        image_names = saved_png_names
-    else:
-        for n in saved_png_names:
-            (out_dir / n).unlink(missing_ok=True)
-        image_names = []
 
     n_pages = len(page_results)
     n_lines = sum(len(p.lines) for p in page_results)

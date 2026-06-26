@@ -155,6 +155,8 @@ def test_full_flow(run_with_mock, png_path):
     assert zipped.content[:2] == b"PK"
     names = zipfile.ZipFile(io.BytesIO(zipped.content)).namelist()
     assert "sample.alto.xml" in names and "sample.hocr" in names
+    # Page images are internal scaffolding -- never swept into a download.
+    assert not any(n.endswith(".png") for n in names)
 
     # Type-filtered zip: just the hOCR (the common "I only want hOCR" case).
     only_hocr = client.get(f"/api/download/{started['job_id']}.zip?types=hocr")
@@ -552,9 +554,11 @@ def test_process_outputs_only_creates_selected_formats(run_with_mock, png_path):
 
     assert status["status"] == "done"
     res = status["results"][0]
-    assert res["hocr"]                                   # the one requested format
+    assert res["hocr"]                                   # the one requested document
     assert res["txt"] is None and res["alto"] is None and res["pdf"] is None
-    assert res["images"] == []                           # page PNGs skipped
+    # Page images are still produced (they back Preview) but are preview-only:
+    # present in the result, each with a preview URL and no download URL.
+    assert res["images"] and all("download" not in im and im.get("preview") for im in res["images"])
 
 
 def test_resume_and_end_release_a_paused_job():

@@ -52,13 +52,15 @@ def test_remove_button_keeps_its_44px_target_inside_the_box():
 
 
 def test_results_offer_type_filtered_bulk_download():
-    """The Results card exposes the type picker (hOCR / ALTO / PDF / text), a
-    'download selected' action, and the everything-zip fallback -- so a large job
-    can be fetched by type instead of one file at a time."""
+    """The Results card exposes the type picker (hOCR / ALTO / PDF / text) inside a
+    fieldset that renderResults reveals only when >1 format was produced, plus the
+    single download action -- so a large job can be fetched by type without two
+    redundant controls."""
     html = client.get("/").text
     for box in ('id="dl-hocr"', 'id="dl-alto"', 'id="dl-pdf"', 'id="dl-txt"'):
         assert box in html, f"missing download checkbox {box}"
-    assert 'id="dl-selected"' in html and 'id="zip-link"' in html
+    assert 'id="dl-types-fieldset"' in html and 'id="dl-selected"' in html
+    assert 'id="zip-link"' not in html  # the separate "Everything" link is gone
 
 
 def test_documents_card_offers_a_local_path_input():
