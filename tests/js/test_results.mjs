@@ -119,6 +119,21 @@ check("multi-format: produced types checked",
   document.getElementById("dl-hocr").checked === true && document.getElementById("dl-pdf").checked === true);
 check("multi-format: unproduced type hidden", document.getElementById("dl-alto").parentElement.hidden === true);
 
+// --- download: a full disk surfaces a message, not a silent failure ------- //
+// Reuses the job789 render above (its dl-selected handler is wired). The
+// pre-flight probe responds like a 507 so the click should show the note.
+const _origFetch = sandbox.fetch;
+sandbox.fetch = () => Promise.resolve({
+  ok: false, status: 507,
+  json: async () => ({ detail: "Not enough free disk space to build this download." }),
+});
+await document.getElementById("dl-selected").onclick();
+sandbox.fetch = _origFetch;
+check("disk-full shows a download note",
+  /disk space/i.test(document.getElementById("download-note").textContent),
+  document.getElementById("download-note").textContent);
+check("download note is visible", document.getElementById("download-note").hidden === false);
+
 // --- selectedOutputs reads the pre-batch pickers ------------------------- //
 document.getElementById("out-hocr").checked = true;
 document.getElementById("out-pdf").checked = true;

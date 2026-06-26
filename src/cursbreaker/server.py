@@ -693,16 +693,28 @@ _TYPE_SUFFIXES = {
 _DOC_SUFFIXES = tuple(suf for sufs in _TYPE_SUFFIXES.values() for suf in sufs)
 
 
-@app.get("/api/download/{job_id}.zip")
-def download_zip(job_id: str, types: str | None = None):
-    """Zip a job's document outputs. ``?types=hocr,txt`` restricts the archive to
-    those types; omit it for every document type. Page images are never included
-    (they're internal scaffolding, not a deliverable).
+def _human_size(num: float) -> str:
+    """Bytes as a short human string, for the disk-space messages."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024:
+            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
 
-    The archive is streamed to a temp file and served from disk -- never held
-    whole in memory -- so a large job can't exhaust RAM and take the process down
-    (the previous build-in-memory-then-getvalue() path doubled a multi-GB zip in
-    RAM and got OOM-killed)."""
+
+@app.get("/api/download/{job_id}.zip")
+def download_zip(job_id: str, types: str | None = None, probe: bool = False):
+    """Download a job's document outputs as a zip. ``?types=hocr,txt`` restricts
+    the archive to those types; omit it for every document type. Page images are
+    never included (internal scaffolding, not a deliverable).
+
+    The zip is built to a temp file and streamed -- never held whole in memory --
+    but building it needs free disk for the whole archive. A 243-page PDF's zip is
+    large, so on a full disk that write used to fail silently (or 500 mid-build),
+    which read as a crash. We now check free space first and return a clear 507;
+    ``?probe=1`` runs that check (and the file selection) without downloading, so
+    the browser can warn before it ever starts. The per-file links stream straight
+    from disk and need no extra space, so the message points there as the way out."""
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "Unknown job.")
@@ -723,16 +735,50 @@ def download_zip(job_id: str, types: str | None = None):
     if not files:
         raise HTTPException(404, "No matching files to download.")
 
-    tag = "_" + "-".join(selected) if selected else ""
-    tmp = tempfile.NamedTemporaryFile(prefix="cursbreaker_zip_", suffix=".zip", delete=False)
-    tmp.close()
-    tmp_path = Path(tmp.name)
+    # Building the zip needs room for the whole archive next to the outputs
+    # (already-compressed PDFs/PNGs don't shrink, so ~the summed size). Check up
+    # front so a full disk gets a clear message, not a silent or mid-write failure.
+    total = sum(f.stat().st_size for f in files)
+    needed = int(total * 1.02) + 8 * 1024 * 1024  # +2% zip overhead, +8 MB slack
     try:
+        free = shutil.disk_usage(out_dir).free
+    except OSError:
+        free = needed  # can't measure -> don't block; the build still guards ENOSPC
+    if free < needed:
+        raise HTTPException(
+            507,
+            f"Not enough free disk space to build this download (it needs about "
+            f"{_human_size(total)}, but only {_human_size(free)} is free). Free up "
+            f"space and try again — or use the per-file download links below, which "
+            f"stream straight from disk and need no extra space.",
+        )
+    if probe:
+        return {"ok": True}
+
+    tag = "_" + "-".join(selected) if selected else ""
+    tmp_path: Path | None = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="cursbreaker_zip_", suffix=".zip", dir=str(out_dir), delete=False
+        )
+        tmp.close()
+        tmp_path = Path(tmp.name)
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in files:
                 zf.write(f, f.name)
+    except OSError as exc:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        if exc.errno == errno.ENOSPC:  # disk filled despite the check (a race)
+            raise HTTPException(
+                507,
+                "Ran out of disk space while building the download. Free up space "
+                "and try again, or use the per-file download links below.",
+            ) from exc
+        raise
     except BaseException:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
         raise
     return FileResponse(
         tmp_path,

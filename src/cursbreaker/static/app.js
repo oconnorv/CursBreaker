@@ -681,6 +681,15 @@ function syncDownloadSelected() {
   if (btn) btn.disabled = selectedDownloadTypes().length === 0;
 }
 
+// Show (or clear) a message under the download controls -- e.g. "not enough disk
+// space to build the zip; use the per-file links". aria-live so it's announced.
+function setDownloadNote(msg) {
+  const el = $("download-note");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
 // Start a download without navigating away: the zip response is an attachment,
 // so a transient anchor click keeps the results page intact.
 function triggerDownload(url) {
@@ -695,9 +704,23 @@ function triggerDownload(url) {
 function renderResults(jobId, job) {
   $("results-card").hidden = false;
   const dlSel = $("dl-selected");
-  if (dlSel) dlSel.onclick = () => {
+  if (dlSel) dlSel.onclick = async () => {
     const types = selectedDownloadTypes();
-    if (types.length) triggerDownload(`/api/download/${jobId}.zip?types=${types.join(",")}`);
+    if (!types.length) return;
+    const url = `/api/download/${jobId}.zip?types=${types.join(",")}`;
+    setDownloadNote("");          // clear any prior message
+    dlSel.disabled = true;
+    try {
+      // Pre-flight: a full disk can't build the zip, so check before the browser
+      // kicks off an attachment download that would otherwise fail silently.
+      await api("GET", url + "&probe=1");
+      triggerDownload(url);
+    } catch (e) {
+      setDownloadNote(e.message || "Couldn't prepare the download.");
+    } finally {
+      dlSel.disabled = false;
+      syncDownloadSelected();
+    }
   };
   // Unified download: one button that grabs the produced formats as a zip. Show
   // the type picker (each produced format checked) only when there's an actual
