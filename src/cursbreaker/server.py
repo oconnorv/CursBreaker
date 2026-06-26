@@ -514,8 +514,10 @@ def _run_job(job_id, paths, settings, out_dir, outputs=None):
                 "hocr": _url(job_id, r.hocr_name),
                 "alto": _url(job_id, r.alto_name),
                 "pdf": _url(job_id, r.pdf_name),
+                # Page images back the Preview overlay only -- no download URL
+                # (derivative images aren't a deliverable).
                 "images": [
-                    {"name": n, "download": _url(job_id, n), "preview": f"/api/preview/{job_id}/{n}"}
+                    {"name": n, "preview": f"/api/preview/{job_id}/{n}"}
                     for n in r.image_names
                 ],
                 "error": r.error,
@@ -678,20 +680,24 @@ def download(job_id: str, name: str):
 
 # Friendly download-type names -> the filename suffixes they map to on disk, for
 # the type-filtered zip (e.g. ?types=hocr,txt). Lets a user grab just the hOCR of
-# a 160-page book instead of the whole archive -- which also holds the page images
-# that back the previews and is what made the all-files zip so large.
+# a 160-page book instead of the whole archive. Page images aren't here: they're
+# internal scaffolding (preview + PDF), never part of a download.
 _TYPE_SUFFIXES = {
     "hocr": (".hocr",),
     "alto": (".alto.xml",),
     "pdf": (".pdf",),
     "txt": (".txt",),
 }
+# Every downloadable document suffix -- the default archive (no ?types) is all of
+# these, so a zip never sweeps in the page-image PNGs sitting alongside them.
+_DOC_SUFFIXES = tuple(suf for sufs in _TYPE_SUFFIXES.values() for suf in sufs)
 
 
 @app.get("/api/download/{job_id}.zip")
 def download_zip(job_id: str, types: str | None = None):
-    """Zip a job's outputs. ``?types=hocr,txt`` restricts the archive to those
-    file types; omit it to include everything (page images included).
+    """Zip a job's document outputs. ``?types=hocr,txt`` restricts the archive to
+    those types; omit it for every document type. Page images are never included
+    (they're internal scaffolding, not a deliverable).
 
     The archive is streamed to a temp file and served from disk -- never held
     whole in memory -- so a large job can't exhaust RAM and take the process down
@@ -702,7 +708,8 @@ def download_zip(job_id: str, types: str | None = None):
         raise HTTPException(404, "Unknown job.")
     out_dir = Path(job["out_dir"])
 
-    selected = suffixes = None
+    selected = None
+    suffixes = _DOC_SUFFIXES  # default ("everything") = all document types, no images
     if types is not None and types.strip():
         selected = [t for t in (s.strip().lower() for s in types.split(",")) if t in _TYPE_SUFFIXES]
         if not selected:
@@ -711,7 +718,7 @@ def download_zip(job_id: str, types: str | None = None):
 
     files = [
         f for f in sorted(out_dir.iterdir())
-        if f.is_file() and (suffixes is None or f.name.endswith(suffixes))
+        if f.is_file() and f.name.endswith(suffixes)
     ]
     if not files:
         raise HTTPException(404, "No matching files to download.")

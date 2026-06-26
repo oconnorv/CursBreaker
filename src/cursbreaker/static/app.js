@@ -448,7 +448,7 @@ function pollStagedPages() {
 
 // Output kinds ticked in the Documents card; [] means "create everything" (the
 // server treats an empty/omitted list as all formats).
-const OUTPUT_FORMAT_IDS = ["txt", "hocr", "alto", "pdf", "images"];
+const OUTPUT_FORMAT_IDS = ["txt", "hocr", "alto", "pdf"];
 function selectedOutputs() {
   return OUTPUT_FORMAT_IDS.filter((t) => { const el = $("out-" + t); return el && el.checked; });
 }
@@ -694,28 +694,26 @@ function triggerDownload(url) {
 
 function renderResults(jobId, job) {
   $("results-card").hidden = false;
-  // "Everything" includes the page images; the type picker grabs just the chosen
-  // outputs. Both hit the same streamed zip endpoint, so neither can OOM.
-  $("zip-link").href = `/api/download/${jobId}.zip`;
   const dlSel = $("dl-selected");
   if (dlSel) dlSel.onclick = () => {
     const types = selectedDownloadTypes();
     if (types.length) triggerDownload(`/api/download/${jobId}.zip?types=${types.join(",")}`);
   };
-  // Only offer download types this run actually produced (the output picker may
-  // have skipped some), so the user can't request an empty zip.
-  const present = new Set();
-  for (const r of (job.results || [])) {
-    for (const t of DOWNLOAD_TYPES) if (r[t]) present.add(t);
-  }
+  // Unified download: one button that grabs the produced formats as a zip. Show
+  // the type picker (each produced format checked) only when there's an actual
+  // choice -- more than one format. With a single format the picker stays hidden
+  // and the button just downloads it, so there aren't two redundant controls.
+  const present = DOWNLOAD_TYPES.filter((t) => (job.results || []).some((r) => r[t]));
   for (const t of DOWNLOAD_TYPES) {
     const cb = $("dl-" + t);
     if (!cb) continue;
-    const has = present.has(t);
+    const has = present.includes(t);
+    cb.checked = has;              // every produced format is selected by default
     cb.disabled = !has;
-    if (!has) cb.checked = false;
-    if (cb.parentElement) cb.parentElement.classList.toggle("dl-unavailable", !has);
+    if (cb.parentElement) cb.parentElement.hidden = !has;  // drop formats not produced
   }
+  const picker = $("dl-types-fieldset");
+  if (picker) picker.hidden = present.length <= 1;
   syncDownloadSelected();
   // Per-job token total with the transparent dollar disclaimer.
   const totals = $("results-tokens");

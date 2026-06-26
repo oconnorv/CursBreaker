@@ -19,6 +19,7 @@ function makeEl(tag) {
     tagName: tag || "", _children: [], _html: "", style: {}, dataset: {}, options: [],
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     value: "", checked: false, hidden: false, textContent: "", className: "", href: "",
+    disabled: false, parentElement: { hidden: false },
     onclick: null, setAttribute() {}, getAttribute() {}, removeAttribute() {}, addEventListener() {},
     appendChild(c) { this._children.push(c); return c; },
     replaceChildren() { this._children = []; }, focus() {},
@@ -81,7 +82,7 @@ check("the .txt/.hocr/.pdf links remain", !!resultDiv
   && /Searchable PDF/.test(resultDiv._html), resultDiv && resultDiv._html);
 check("results markup has no PNG download", !!resultDiv && !/Page PNG|PNG p\d/.test(resultDiv._html));
 
-// --- output picker: only produced types stay downloadable ---------------- //
+// --- unified download: picker only when >1 format produced --------------- //
 created.length = 0;
 sandbox.renderResults("job456", {
   tokens: { calls: 0 },
@@ -91,17 +92,32 @@ sandbox.renderResults("job456", {
     tokens: { total: 0, cost: null, calls: 0 }, images: [],
   }],
 });
-check("produced type stays enabled (hOCR)", document.getElementById("dl-hocr").disabled === false);
-check("absent type disabled (PDF)", document.getElementById("dl-pdf").disabled === true);
-check("absent type disabled (ALTO)", document.getElementById("dl-alto").disabled === true);
-check("absent type disabled (Text)", document.getElementById("dl-txt").disabled === true);
-check("absent type unchecked (PDF)", document.getElementById("dl-pdf").checked === false);
-// Result markup links only the produced format — no broken href="null".
+// One format -> no redundant picker: the type fieldset is hidden, just the button.
+check("single-format: type picker hidden", document.getElementById("dl-types-fieldset").hidden === true);
+check("single-format: produced type checked", document.getElementById("dl-hocr").checked === true);
+check("single-format: produced label shown", document.getElementById("dl-hocr").parentElement.hidden === false);
+check("single-format: absent type unchecked", document.getElementById("dl-pdf").checked === false);
+check("single-format: absent label hidden", document.getElementById("dl-pdf").parentElement.hidden === true);
+// Per-file links only for the produced format — no broken href="null".
 const onlyDiv = created.find((e) => e.tagName === "div" && /class="links"/.test(e._html));
 check("hOCR-only result links just hOCR", !!onlyDiv && /Download \.hocr/.test(onlyDiv._html)
   && !/Download \.txt/.test(onlyDiv._html) && !/ALTO/.test(onlyDiv._html) && !/Searchable PDF/.test(onlyDiv._html),
   onlyDiv && onlyDiv._html);
 check("no broken null hrefs anywhere", !created.some((e) => /href="null"/.test(e._html || "")));
+
+// Two formats -> the picker appears, each produced format checked, the rest hidden.
+sandbox.renderResults("job789", {
+  tokens: { calls: 0 },
+  results: [{
+    source_name: "two.tif", n_pages: 1, n_lines: 4, error: null,
+    pdf: "/pdf", txt: null, alto: null, hocr: "/hocr",  // hOCR + PDF produced
+    tokens: { total: 0, cost: null, calls: 0 }, images: [],
+  }],
+});
+check("multi-format: type picker shown", document.getElementById("dl-types-fieldset").hidden === false);
+check("multi-format: produced types checked",
+  document.getElementById("dl-hocr").checked === true && document.getElementById("dl-pdf").checked === true);
+check("multi-format: unproduced type hidden", document.getElementById("dl-alto").parentElement.hidden === true);
 
 // --- selectedOutputs reads the pre-batch pickers ------------------------- //
 document.getElementById("out-hocr").checked = true;
