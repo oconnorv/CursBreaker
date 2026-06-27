@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=29" />
+  <link rel="stylesheet" href="/static/styles.css?v=30" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -218,6 +218,9 @@
         </fieldset>
         <button id="dl-selected" class="btn small primary" type="button">Download (.zip)</button>
       </div>
+      <!-- Download problems (e.g. "not enough disk space to build the zip") land
+           here instead of failing silently; role=alert so it's announced. -->
+      <p id="download-note" class="dl-note" role="alert" hidden></p>
       <p id="results-tokens" class="muted token-text" hidden></p>
       <div id="results"></div>
     </section>
@@ -268,6 +271,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=31"></script>
+  <script src="/static/app.js?v=32"></script>
 </body>
 </html>

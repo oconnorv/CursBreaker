@@ -312,6 +312,9 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 .dl-types legend { padding: 0 6px; font-size: 13px; color: var(--muted); }
 .dl-types label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer; }
 .dl-types input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+/* Download problem message (e.g. disk full); sits under the download controls. */
+.dl-note { margin: 0 0 14px; color: var(--err-ink); font-size: 13.5px; line-height: 1.45; }
+.dl-note[hidden] { display: none; }
 
 /* Pre-batch output picker in the Documents card: same compact checkbox row as
    the Results download-by-type control, so the two read as a pair. */

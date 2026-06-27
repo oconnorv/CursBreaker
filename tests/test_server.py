@@ -580,6 +580,41 @@ def test_process_outputs_only_creates_selected_formats(run_with_mock, png_path):
     assert res["images"] and all("download" not in im and im.get("preview") for im in res["images"])
 
 
+def _run_default_job(png_path):
+    with open(png_path, "rb") as fh:
+        up = client.post("/api/upload", files={"files": ("p.png", fh, "image/png")}).json()
+    started = client.post("/api/process", json={"file_ids": [up["files"][0]["id"]]}).json()
+    job_id = started["job_id"]
+    _wait_done(job_id)
+    return job_id
+
+
+def test_download_zip_reports_disk_full_clearly(run_with_mock, png_path, monkeypatch):
+    """A full disk can't build the temp zip. Instead of failing silently (or a
+    500 mid-write that reads as a crash), the endpoint returns 507 with a clear
+    message -- and the probe reports it the same way, before any download starts."""
+    import collections
+    from cursbreaker import server
+
+    job_id = _run_default_job(png_path)
+    Usage = collections.namedtuple("Usage", "total used free")
+    monkeypatch.setattr(server.shutil, "disk_usage", lambda p: Usage(10**9, 10**9, 0))
+    r = client.get(f"/api/download/{job_id}.zip")
+    assert r.status_code == 507
+    assert "disk space" in r.json()["detail"].lower()
+    assert client.get(f"/api/download/{job_id}.zip?probe=1").status_code == 507
+
+
+def test_download_probe_ok_then_real_download_works(run_with_mock, png_path):
+    job_id = _run_default_job(png_path)
+    # Plenty of space in the test env -> probe is a cheap green light...
+    probe = client.get(f"/api/download/{job_id}.zip?probe=1")
+    assert probe.status_code == 200 and probe.json() == {"ok": True}
+    # ...and the real download still streams a zip.
+    z = client.get(f"/api/download/{job_id}.zip")
+    assert z.status_code == 200 and z.content[:2] == b"PK"
+
+
 def test_resume_and_end_release_a_paused_job():
     """/resume and /end record the action and wake the blocked worker; both are
     no-ops unless the job is actually paused, and 404 on an unknown job."""
