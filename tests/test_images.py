@@ -1,6 +1,11 @@
 from PIL import Image, TiffImagePlugin, UnidentifiedImageError
 
-from cursbreaker.images import count_content_pages, is_supported, load_pages
+from cursbreaker.images import (
+    count_content_pages,
+    is_supported,
+    load_output_images,
+    load_pages,
+)
 
 
 def _tiff_with_thumbnail(path):
@@ -111,3 +116,58 @@ def test_iter_pages_renders_pdf_lazily(pdf_path, monkeypatch):
     next(it)
     assert calls["n"] == 2         # advancing renders the next page
     it.close()
+
+
+# --- load_output_images: preserve the user's original bytes -------------- #
+
+def test_output_image_jpeg_is_byte_for_byte_passthrough(tmp_path):
+    p = tmp_path / "photo.jpg"
+    Image.new("RGB", (640, 480), (200, 100, 50)).save(p, format="JPEG", quality=90)
+    original = p.read_bytes()
+    specs = load_output_images(p)
+    assert len(specs) == 1
+    spec = specs[0]
+    # The user's original JPEG bytes are carried through untouched (no re-encode,
+    # no decode), so the embedded image is exactly the file they uploaded.
+    assert spec.data == original
+    assert spec.image is None
+    assert (spec.width, spec.height) == (640, 480)
+    assert spec.rotate == 0
+
+
+def test_output_image_png_is_byte_for_byte_passthrough(tmp_path):
+    p = tmp_path / "scan.png"
+    Image.new("RGB", (300, 200), (1, 2, 3)).save(p, format="PNG")
+    original = p.read_bytes()
+    spec = load_output_images(p)[0]
+    assert spec.data == original and spec.image is None
+    assert (spec.width, spec.height) == (300, 200)
+
+
+def test_output_image_jpeg_exif_rotation_reproduced_without_re_encoding(tmp_path):
+    # A JPEG whose pixels are stored sideways with EXIF orientation 6 (rotate 90
+    # CW for display). We must keep the original bytes AND record the rotation so
+    # the page shows it upright -- matching the EXIF-corrected OCR coordinates.
+    p = tmp_path / "rot.jpg"
+    im = Image.new("RGB", (640, 480), (10, 20, 30))
+    exif = im.getexif()
+    exif[274] = 6
+    im.save(p, format="JPEG", quality=90, exif=exif)
+    original = p.read_bytes()
+    spec = load_output_images(p)[0]
+    assert spec.data == original          # bytes untouched
+    assert spec.rotate == 270             # PyMuPDF rotate that uprights orientation 6
+    # Upright (displayed) dimensions are the stored 640x480 swapped.
+    assert (spec.width, spec.height) == (480, 640)
+
+
+def test_output_image_multiframe_tiff_falls_back_to_decoded_frames(tmp_path):
+    # TIFF can't be embedded byte-for-byte, so each content frame is decoded and
+    # carried as a (lossless) PIL image -- still the full-resolution original,
+    # with the embedded thumbnail skipped.
+    p = _tiff_with_thumbnail(tmp_path / "multi.tif")
+    specs = load_output_images(p)
+    assert len(specs) == 1                # thumbnail frame skipped
+    spec = specs[0]
+    assert spec.data is None and spec.image is not None
+    assert (spec.width, spec.height) == (800, 600)

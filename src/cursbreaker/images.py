@@ -242,3 +242,59 @@ def load_pages(
             max_pages=max_pages,
         )
     )
+
+
+# EXIF orientation tag -> the ``rotate`` PyMuPDF's insert_image needs to display
+# the *stored* image upright. Verified empirically: 6 and 8 are the opposite of
+# the naive "rotate clockwise" reading. Flips (2/4/5/7) aren't pure rotations and
+# fall through to a decoded, EXIF-corrected embed instead.
+_EXIF_INSERT_ROTATE = {1: 0, 3: 180, 6: 270, 8: 90}
+
+
+@dataclass
+class OutputImage:
+    """One image to embed in the output PDF, in upright (displayed) orientation
+    that matches the OCR coordinate space.
+
+    Either ``data`` -- the *original encoded bytes*, embedded as-is so a JPEG
+    stays byte-for-byte the user's file (PDF stores it as DCTDecode; PNG stays
+    lossless) -- displayed with ``rotate``; or ``image`` -- a decoded PIL image
+    embedded losslessly (the fallback for multi-frame files, EXIF flips, or
+    formats PDF can't carry natively, where pixels are still preserved exactly)."""
+
+    width: int
+    height: int
+    data: bytes | None = None
+    rotate: int = 0
+    image: Image.Image | None = None
+
+
+def load_output_images(path: str | Path, *, dpi: int = 300) -> list[OutputImage]:
+    """Per content-frame images for the output searchable PDF, preserving the
+    user's original as closely as the PDF format allows.
+
+    A single-frame JPEG or PNG is passed through byte-for-byte (only its EXIF
+    rotation is reproduced via the page rotation), so the embedded image is the
+    user's untouched original. Anything else -- multi-frame TIFF/GIF, an EXIF
+    flip, a thumbnail-bearing file, or a Pillow-undecodable file -- is decoded,
+    oriented upright and embedded losslessly (pixels identical, never downscaled
+    or enhanced). Frame N matches OCR page N."""
+    path = Path(path)
+    if path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+        try:
+            data = path.read_bytes()
+            with Image.open(io.BytesIO(data)) as im:
+                orientation = im.getexif().get(274, 1) or 1
+                if getattr(im, "n_frames", 1) == 1 and orientation in _EXIF_INSERT_ROTATE:
+                    rotate = _EXIF_INSERT_ROTATE[orientation]
+                    w, h = im.size
+                    if rotate in (90, 270):  # upright dimensions after rotation
+                        w, h = h, w
+                    return [OutputImage(width=w, height=h, data=data, rotate=rotate)]
+        except Exception:
+            pass  # fall through to the decode path
+    out = []
+    for frame in _raster_frames(path, dpi=dpi):
+        img = ImageOps.exif_transpose(frame).convert("RGB")
+        out.append(OutputImage(width=img.width, height=img.height, image=img))
+    return out
