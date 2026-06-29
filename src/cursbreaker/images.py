@@ -242,3 +242,16 @@ def load_pages(
             max_pages=max_pages,
         )
     )
+
+
+def load_output_frames(path: str | Path, *, dpi: int = 300) -> list[Image.Image]:
+    """Full-resolution, EXIF-corrected RGB frames for embedding in the *output*
+    searchable PDF: the user's original pixels, oriented upright and color-
+    normalized, but NOT denoised/contrast-adjusted and NOT downscaled (unlike the
+    OCR render in ``iter_pages``). Same content frames (thumbnails skipped), so
+    frame N pairs with OCR page N. (PDF inputs don't use this -- they overlay text
+    on the original PDF directly.)"""
+    return [
+        ImageOps.exif_transpose(f).convert("RGB")
+        for f in _raster_frames(Path(path), dpi=dpi)
+    ]

@@ -2,114 +2,134 @@ import fitz
 from PIL import Image
 
 from cursbreaker.models import PageResult, PixelBox, TranscribedLine
-from cursbreaker.searchable_pdf import build_searchable_pdf
+from cursbreaker.searchable_pdf import (
+    write_searchable_pdf_from_images,
+    write_searchable_pdf_over_source,
+)
 
 
-def _png(tmp_path, name, size=(400, 200)):
-    p = tmp_path / name
-    Image.new("RGB", size, "white").save(p)
-    return p
+def _img(size=(400, 200), color="white"):
+    return Image.new("RGB", size, color)
 
 
-def test_pdf_contains_invisible_text_and_image(tmp_path):
-    img = _png(tmp_path, "page.png")
-    page = PageResult(
-        image_name="page.png",
-        width=400,
-        height=200,
-        lines=[
-            TranscribedLine(
-                text="hello world", box=PixelBox(x0=10, y0=20, x1=300, y1=60)
-            ),
-            TranscribedLine(
-                text="second line here",
-                box=PixelBox(x0=10, y0=80, x1=380, y1=120),
-            ),
-        ],
-        plain_text="hello world\nsecond line here",
+def _page(width, height, lines, plain=""):
+    return PageResult(
+        image_name="p.png", width=width, height=height, lines=lines, plain_text=plain
     )
 
-    pdf_bytes = build_searchable_pdf([page], [img])
-    out = tmp_path / "out.pdf"
-    out.write_bytes(pdf_bytes)
 
+# --- image inputs: embed the full-resolution original + invisible text ---- #
+
+def test_image_pdf_has_invisible_text_and_image(tmp_path):
+    page = _page(400, 200, [
+        TranscribedLine(text="hello world", box=PixelBox(x0=10, y0=20, x1=300, y1=60)),
+        TranscribedLine(text="second line here", box=PixelBox(x0=10, y0=80, x1=380, y1=120)),
+    ], "hello world\nsecond line here")
+    out = tmp_path / "out.pdf"
+    write_searchable_pdf_from_images([_img((400, 200))], [page], out)
     with fitz.open(out) as doc:
         assert doc.page_count == 1
+        assert round(doc[0].rect.width) == 400 and round(doc[0].rect.height) == 200
         text = doc[0].get_text()
         for word in ("hello", "world", "second", "line", "here"):
-            assert word in text, f"missing {word!r} in extracted text"
-        # The page image is embedded.
+            assert word in text, f"missing {word!r}"
         assert len(doc[0].get_images()) >= 1
 
 
-def test_pdf_multipage_matches_input(tmp_path):
-    pages, images = [], []
-    for i in range(3):
-        p = _png(tmp_path, f"p{i}.png")
-        images.append(p)
-        pages.append(
-            PageResult(
-                image_name=p.name,
-                width=400,
-                height=200,
-                lines=[
-                    TranscribedLine(
-                        text=f"page {i + 1}",
-                        box=PixelBox(x0=10, y0=10, x1=200, y1=50),
-                    )
-                ],
-                plain_text=f"page {i + 1}",
-            )
-        )
-    pdf_bytes = build_searchable_pdf(pages, images)
-    out = tmp_path / "multi.pdf"
-    out.write_bytes(pdf_bytes)
+def test_image_pdf_embeds_full_res_even_when_ocr_downscaled(tmp_path):
+    # OCR ran on a 200x100 downscale; the output must embed the 800x400 original.
+    page = _page(200, 100, [
+        TranscribedLine(text="big page", box=PixelBox(x0=10, y0=10, x1=180, y1=40)),
+    ], "big page")
+    out = tmp_path / "full.pdf"
+    write_searchable_pdf_from_images([_img((800, 400))], [page], out)
     with fitz.open(out) as doc:
-        assert doc.page_count == 3
-        for i in range(3):
-            assert f"page" in doc[i].get_text()
+        assert round(doc[0].rect.width) == 800 and round(doc[0].rect.height) == 400
+        assert "big" in doc[0].get_text()
 
 
-def test_unicode_text_round_trips(tmp_path):
-    img = _png(tmp_path, "u.png", size=(700, 240))
-    page = PageResult(
-        image_name="u.png",
-        width=700,
-        height=240,
-        lines=[
-            TranscribedLine(
-                text="Café naïveté résumé",
-                box=PixelBox(x0=10, y0=20, x1=600, y1=60),
-            ),
-            TranscribedLine(
-                text="Привет мир",
-                box=PixelBox(x0=10, y0=90, x1=500, y1=130),
-            ),
-            TranscribedLine(
-                text="Καλημέρα κόσμε",
-                box=PixelBox(x0=10, y0=160, x1=600, y1=200),
-            ),
-        ],
-        plain_text="Café naïveté résumé\nПривет мир\nΚαλημέρα κόσμε",
-    )
-    pdf_bytes = build_searchable_pdf([page], [img])
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+def test_unicode_round_trips(tmp_path):
+    page = _page(700, 240, [
+        TranscribedLine(text="Café naïveté résumé", box=PixelBox(x0=10, y0=20, x1=600, y1=60)),
+        TranscribedLine(text="Привет мир", box=PixelBox(x0=10, y0=90, x1=500, y1=130)),
+        TranscribedLine(text="Καλημέρα κόσμε", box=PixelBox(x0=10, y0=160, x1=600, y1=200)),
+    ])
+    out = tmp_path / "u.pdf"
+    write_searchable_pdf_from_images([_img((700, 240))], [page], out)
+    with fitz.open(out) as doc:
         text = doc[0].get_text()
-    for word in (
-        "Café", "naïveté", "résumé",        # extended Latin
-        "Привет", "мир",                    # Cyrillic
-        "Καλημέρα", "κόσμε",                # Greek
-    ):
-        assert word in text, f"missing {word!r} in extracted text"
+    for word in ("Café", "naïveté", "résumé", "Привет", "мир", "Καλημέρα", "κόσμε"):
+        assert word in text, f"missing {word!r}"
 
 
-def test_length_mismatch_raises(tmp_path):
-    img = _png(tmp_path, "x.png")
-    page = PageResult(
-        image_name="x.png", width=400, height=200, lines=[], plain_text=""
-    )
+def test_image_length_mismatch_raises(tmp_path):
+    page = _page(400, 200, [])
     try:
-        build_searchable_pdf([page, page], [img])
+        write_searchable_pdf_from_images([_img()], [page, page], tmp_path / "x.pdf")
     except ValueError:
         return
     raise AssertionError("expected ValueError for mismatched lengths")
+
+
+# --- PDF inputs: overlay text on the original PDF (no re-rasterization) ---- #
+
+def _source_pdf(path, n=2, width=612, height=792, rotation=0):
+    doc = fitz.open()
+    for i in range(n):
+        p = doc.new_page(width=width, height=height)
+        p.insert_text((72, 100), f"ORIGINAL {i + 1}")
+        if rotation:
+            p.set_rotation(rotation)
+    doc.save(path)
+    doc.close()
+
+
+def test_pdf_overlay_preserves_original_pages(tmp_path):
+    src = tmp_path / "src.pdf"
+    _source_pdf(src, n=2)
+    # OCR results came from a 300-dpi render (612*4.17 x 792*4.17 ~= 2550x3300),
+    # but we overlay on the original, so the output keeps the 612x792 page size.
+    pages = [
+        _page(2550, 3300, [
+            TranscribedLine(text=f"ocr page {i + 1}", box=PixelBox(x0=100, y0=100, x1=900, y1=220)),
+        ], f"ocr page {i + 1}")
+        for i in range(2)
+    ]
+    out = tmp_path / "over.pdf"
+    write_searchable_pdf_over_source(src, pages, out)
+    with fitz.open(out) as doc:
+        assert doc.page_count == 2
+        for i in range(2):
+            # Original page size kept (not the pixel-sized page a re-raster makes).
+            assert round(doc[i].rect.width) == 612 and round(doc[i].rect.height) == 792
+            text = doc[i].get_text()
+            assert f"ORIGINAL {i + 1}" in text   # original content survives
+            assert "ocr" in text and "page" in text  # plus the searchable overlay
+
+
+def test_pdf_overlay_keeps_rotation_and_stays_searchable(tmp_path):
+    src = tmp_path / "rot.pdf"
+    _source_pdf(src, n=1, rotation=90)
+    # A 90-rotated 612x792 page displays landscape (792x612); the OCR render is
+    # that displayed orientation at 300 dpi (~3300x2550).
+    page = _page(3300, 2550, [
+        TranscribedLine(text="sideways words", box=PixelBox(x0=100, y0=100, x1=1200, y1=260)),
+    ], "sideways words")
+    out = tmp_path / "rot_out.pdf"
+    write_searchable_pdf_over_source(src, [page], out)
+    with fitz.open(out) as doc:
+        assert doc[0].rotation == 90              # original orientation preserved
+        text = doc[0].get_text()
+        assert "ORIGINAL" in text                 # original content survives
+        assert "sideways" in text and "words" in text  # overlay is searchable
+
+
+def test_pdf_overlay_more_pages_than_source_raises(tmp_path):
+    src = tmp_path / "one.pdf"
+    _source_pdf(src, n=1)
+    pages = [_page(612, 792, []), _page(612, 792, [])]
+    try:
+        write_searchable_pdf_over_source(src, pages, tmp_path / "x.pdf")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError when OCR pages exceed source pages")

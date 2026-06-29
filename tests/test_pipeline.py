@@ -599,6 +599,39 @@ def test_outputs_empty_means_every_document(png_path, tmp_path):
         assert (out / n).exists()
 
 
+# --- searchable PDF preserves original quality --------------------------- #
+
+def test_pdf_input_searchable_pdf_overlays_the_original(pdf_path, tmp_path):
+    """A PDF input gets the text overlaid on a copy of the *original* PDF: the
+    output keeps the source page size (no 300-dpi re-rasterization) and the
+    original page content survives alongside the searchable layer."""
+    import fitz
+    out = tmp_path / "out"
+    r = process_file(pdf_path, MockProvider(), Settings(mode="one_pass"), out, outputs={"pdf"})
+    assert r.pdf_name
+    with fitz.open(out / r.pdf_name) as doc:
+        assert doc.page_count == 2
+        # 612x792 source page preserved -> overlay, not a pixel-sized re-raster.
+        assert round(doc[0].rect.width) == 612 and round(doc[0].rect.height) == 792
+        assert "Page 1 text" in doc[0].get_text()  # original content survives
+
+
+def test_image_input_searchable_pdf_embeds_full_resolution(png_path, tmp_path):
+    """An image input embeds the full-resolution original, even when the OCR
+    render was downscaled -- so the user never gets a down-scaled image back."""
+    import fitz
+    from PIL import Image
+    ow, oh = Image.open(png_path).size  # 800x600
+    out = tmp_path / "out"
+    r = process_file(
+        png_path, MockProvider(), Settings(mode="one_pass", max_dimension=200), out,
+        outputs={"pdf"},
+    )
+    assert r.pdf_name
+    with fitz.open(out / r.pdf_name) as doc:
+        assert round(doc[0].rect.width) == ow and round(doc[0].rect.height) == oh
+
+
 def test_progress_default_report_is_optional(png_path, tmp_path):
     # process_file/process_page still work with no reporter passed (back-compat).
     out = tmp_path / "out"
