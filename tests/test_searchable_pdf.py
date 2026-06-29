@@ -1,6 +1,9 @@
+import io
+
 import fitz
 from PIL import Image
 
+from cursbreaker.images import OutputImage
 from cursbreaker.models import PageResult, PixelBox, TranscribedLine
 from cursbreaker.searchable_pdf import (
     write_searchable_pdf_from_images,
@@ -10,6 +13,11 @@ from cursbreaker.searchable_pdf import (
 
 def _img(size=(400, 200), color="white"):
     return Image.new("RGB", size, color)
+
+
+def _decoded(img):
+    """An OutputImage that embeds a decoded PIL image (the lossless fallback)."""
+    return OutputImage(width=img.width, height=img.height, image=img)
 
 
 def _page(width, height, lines, plain=""):
@@ -26,7 +34,7 @@ def test_image_pdf_has_invisible_text_and_image(tmp_path):
         TranscribedLine(text="second line here", box=PixelBox(x0=10, y0=80, x1=380, y1=120)),
     ], "hello world\nsecond line here")
     out = tmp_path / "out.pdf"
-    write_searchable_pdf_from_images([_img((400, 200))], [page], out)
+    write_searchable_pdf_from_images([_decoded(_img((400, 200)))], [page], out)
     with fitz.open(out) as doc:
         assert doc.page_count == 1
         assert round(doc[0].rect.width) == 400 and round(doc[0].rect.height) == 200
@@ -42,7 +50,7 @@ def test_image_pdf_embeds_full_res_even_when_ocr_downscaled(tmp_path):
         TranscribedLine(text="big page", box=PixelBox(x0=10, y0=10, x1=180, y1=40)),
     ], "big page")
     out = tmp_path / "full.pdf"
-    write_searchable_pdf_from_images([_img((800, 400))], [page], out)
+    write_searchable_pdf_from_images([_decoded(_img((800, 400)))], [page], out)
     with fitz.open(out) as doc:
         assert round(doc[0].rect.width) == 800 and round(doc[0].rect.height) == 400
         assert "big" in doc[0].get_text()
@@ -55,7 +63,7 @@ def test_unicode_round_trips(tmp_path):
         TranscribedLine(text="Καλημέρα κόσμε", box=PixelBox(x0=10, y0=160, x1=600, y1=200)),
     ])
     out = tmp_path / "u.pdf"
-    write_searchable_pdf_from_images([_img((700, 240))], [page], out)
+    write_searchable_pdf_from_images([_decoded(_img((700, 240)))], [page], out)
     with fitz.open(out) as doc:
         text = doc[0].get_text()
     for word in ("Café", "naïveté", "résumé", "Привет", "мир", "Καλημέρα", "κόσμε"):
@@ -65,10 +73,31 @@ def test_unicode_round_trips(tmp_path):
 def test_image_length_mismatch_raises(tmp_path):
     page = _page(400, 200, [])
     try:
-        write_searchable_pdf_from_images([_img()], [page, page], tmp_path / "x.pdf")
+        write_searchable_pdf_from_images([_decoded(_img())], [page, page], tmp_path / "x.pdf")
     except ValueError:
         return
     raise AssertionError("expected ValueError for mismatched lengths")
+
+
+def test_passthrough_embeds_original_bytes_unaltered(tmp_path):
+    # A passthrough OutputImage carries the user's original encoded bytes; the
+    # PDF must store them byte-for-byte (JPEG -> DCTDecode), so the user's image
+    # comes back completely unaltered except for the added searchable layer.
+    buf = io.BytesIO()
+    _img((500, 300), "white").save(buf, format="JPEG", quality=90)
+    jpeg_bytes = buf.getvalue()
+    spec = OutputImage(width=500, height=300, data=jpeg_bytes)
+    page = _page(500, 300, [
+        TranscribedLine(text="overlay text", box=PixelBox(x0=10, y0=10, x1=300, y1=60)),
+    ], "overlay text")
+    out = tmp_path / "passthrough.pdf"
+    write_searchable_pdf_from_images([spec], [page], out)
+    with fitz.open(out) as doc:
+        assert round(doc[0].rect.width) == 500 and round(doc[0].rect.height) == 300
+        xref = doc[0].get_images()[0][0]
+        info = doc.extract_image(xref)
+        assert info["image"] == jpeg_bytes  # exact original JPEG, no re-encode
+        assert "overlay" in doc[0].get_text()  # still searchable
 
 
 # --- PDF inputs: overlay text on the original PDF (no re-rasterization) ---- #

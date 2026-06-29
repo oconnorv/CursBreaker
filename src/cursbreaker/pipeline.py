@@ -24,7 +24,7 @@ from .images import (
     blank_png,
     count_content_pages,
     iter_pages,
-    load_output_frames,
+    load_output_images,
     load_pages,
 )
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
@@ -427,10 +427,11 @@ def process_file(
             # page sizes and orientation preserved, no re-rasterization.
             write_searchable_pdf_over_source(path, page_results, pdf_out)
         else:
-            # Embed the full-resolution, upright source image(s) -- not the
-            # downscaled/enhanced OCR render -- and overlay the text.
+            # Embed the original source image(s) untouched (JPEG byte-for-byte;
+            # others full-resolution and lossless) -- not the downscaled/enhanced
+            # OCR render -- and overlay the text.
             write_searchable_pdf_from_images(
-                load_output_frames(path, dpi=settings.pdf_dpi), page_results, pdf_out
+                load_output_images(path, dpi=settings.pdf_dpi), page_results, pdf_out
             )
 
     n_pages = len(page_results)

@@ -99,19 +99,26 @@ def write_searchable_pdf_from_images(
     images, pages: list[PageResult], out_path: str | Path
 ) -> None:
     """Searchable PDF for *image* inputs: one page per full-resolution source
-    image (the user's original pixels, oriented upright -- not the downscaled or
-    enhanced OCR render), with the invisible OCR text overlaid. ``images`` are PIL
-    images; saved losslessly so no quality is lost."""
+    image, with the invisible OCR text overlaid. ``images`` are ``OutputImage``
+    specs: a passthrough one embeds the user's original bytes untouched (a JPEG
+    stays byte-for-byte identical), a decoded one embeds full-resolution pixels
+    losslessly -- never the downscaled/enhanced OCR render."""
     if len(images) != len(pages):
         raise ValueError("images and pages must have the same length")
     doc = fitz.open()
     try:
-        for img, page_result in zip(images, pages):
-            w, h = img.size
+        for spec, page_result in zip(images, pages):
+            w, h = spec.width, spec.height
             page = doc.new_page(width=w, height=h)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")  # lossless: keeps the original pixels
-            page.insert_image(fitz.Rect(0, 0, w, h), stream=buf.getvalue())
+            rect = fitz.Rect(0, 0, w, h)
+            if spec.data is not None:
+                # Embed the original encoded bytes as-is (JPEG -> DCTDecode, exact);
+                # rotate reproduces the source's EXIF orientation.
+                page.insert_image(rect, stream=spec.data, rotate=spec.rotate)
+            else:
+                buf = io.BytesIO()
+                spec.image.save(buf, format="PNG")  # lossless: original pixels kept
+                page.insert_image(rect, stream=buf.getvalue())
             _overlay_text(page, page_result)
         doc.save(str(out_path), deflate=True)
     finally:
