@@ -377,6 +377,12 @@ function stagedStatus(list = staged) {
   return `${base} · ${pages.toLocaleString()} page(s)`;
 }
 
+// A job in flight must keep Transcribe/Estimate disabled even if something that
+// would normally re-enable them runs mid-job (a staged-list re-render, or a
+// previously-issued cost estimate returning). Those buttons do nothing useful
+// while work is underway, so they stay greyed until the job ends.
+function jobRunning() { return activeJobId != null; }
+
 function renderStaged() {
   const ul = $("staged");
   ul.innerHTML = "";
@@ -391,8 +397,8 @@ function renderStaged() {
     li.appendChild(rm);
     ul.appendChild(li);
   }
-  $("transcribe").disabled = staged.length === 0;
-  $("estimate").disabled = staged.length === 0;
+  $("transcribe").disabled = staged.length === 0 || jobRunning();
+  $("estimate").disabled = staged.length === 0 || jobRunning();
   // Any change to the file set invalidates a prior cost estimate.
   const est = $("estimate-info");
   if (est) { est.hidden = true; est.innerHTML = ""; }
@@ -892,7 +898,9 @@ async function estimateCost() {
       `<div class="estimate-line"><span class="glyph" aria-hidden="true">!</span><span>Couldn't estimate: ${escapeHtml(e.message)}</span></div>`;
     announce("Couldn't estimate cost: " + e.message);
   } finally {
-    $("estimate").disabled = staged.length === 0;
+    // Don't re-enable if a transcription job started while this estimate was in
+    // flight -- it must stay greyed for the duration of the run.
+    $("estimate").disabled = staged.length === 0 || jobRunning();
   }
 }
 

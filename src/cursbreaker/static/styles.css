@@ -206,10 +206,13 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
   text-decoration: none; min-height: 44px; min-width: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
-.btn:hover { border-color: var(--link); }
+.btn:not(:disabled):hover { border-color: var(--link); }
 .btn.small { padding: 8px 14px; font-size: 13px; }  /* keeps the 44px min-height */
 .btn.primary { background: linear-gradient(135deg, var(--accent), #6a49ff); border: none; font-weight: 600; color: #fff; }
-.btn.primary:disabled { opacity: .5; cursor: not-allowed; }
+/* Any disabled button (Estimate, Transcribe, …) reads as inactive -- dimmed with
+   a not-allowed cursor and no hover affordance -- so it's clearly not clickable
+   while a job is running. */
+.btn:disabled { opacity: .5; cursor: not-allowed; }
 /* Cancel: hint that it's a "stop" action on hover (not destructive — completed
    files are kept). */
 #cancel-job:hover { border-color: var(--err-ink); color: var(--err-ink); }
