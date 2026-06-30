@@ -68,3 +68,21 @@ def test_documents_card_offers_a_local_path_input():
     files already on disk by path (read in place, no copy)."""
     html = client.get("/").text
     assert 'id="path-input"' in html and 'id="add-path"' in html
+
+
+def test_disabled_buttons_read_as_inactive():
+    """A disabled button must look inactive, not just be inert. The Estimate
+    button is a plain ``.btn`` (no ``.primary``); without a general
+    ``.btn:disabled`` rule it stayed full-opacity with a pointer cursor while a
+    job ran -- looking clickable but doing nothing. Guard that the dimmed,
+    not-allowed treatment applies to every ``.btn``, not only ``.btn.primary``."""
+    css = _css()
+    block = _block(css, ".btn:disabled {")
+    assert "opacity:" in block, "disabled buttons should be dimmed"
+    assert "cursor: not-allowed" in block, "disabled buttons should show not-allowed"
+    # The hover highlight (a clickable affordance) must not apply while disabled.
+    assert ".btn:not(:disabled):hover" in css, "disabled buttons should not get hover styling"
+
+    # The Estimate button really is a plain .btn, so it depends on the rule above.
+    html = client.get("/").text
+    assert '<button id="estimate" class="btn"' in html
