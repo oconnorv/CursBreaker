@@ -157,8 +157,62 @@ def test_pdf_overlay_more_pages_than_source_raises(tmp_path):
     src = tmp_path / "one.pdf"
     _source_pdf(src, n=1)
     pages = [_page(612, 792, []), _page(612, 792, [])]
+    out = tmp_path / "x.pdf"
     try:
-        write_searchable_pdf_over_source(src, pages, tmp_path / "x.pdf")
+        write_searchable_pdf_over_source(src, pages, out)
     except ValueError:
+        # Validated before any output file is created.
+        assert not out.exists()
         return
     raise AssertionError("expected ValueError when OCR pages exceed source pages")
+
+
+def test_pdf_overlay_appends_to_the_unaltered_original(tmp_path):
+    # The text layer is appended incrementally: the output begins with the
+    # source's exact bytes (original untouched) with only the searchable layer
+    # added on the end. That append-don't-rebuild approach is also what keeps
+    # memory flat on huge PDFs -- we never serialize the whole document at once.
+    src = tmp_path / "src.pdf"
+    _source_pdf(src, n=3)
+    original = src.read_bytes()
+    pages = [
+        _page(612, 792, [
+            TranscribedLine(text=f"layer {i + 1}", box=PixelBox(x0=72, y0=120, x1=400, y1=160)),
+        ], f"layer {i + 1}")
+        for i in range(3)
+    ]
+    out = tmp_path / "appended.pdf"
+    write_searchable_pdf_over_source(src, pages, out)
+    result = out.read_bytes()
+    assert result.startswith(original)   # original bytes preserved verbatim
+    assert len(result) > len(original)   # plus the appended text layer
+    with fitz.open(out) as doc:
+        assert doc.page_count == 3
+        assert "ORIGINAL 1" in doc[0].get_text() and "layer" in doc[0].get_text()
+
+
+def test_pdf_overlay_falls_back_to_full_save(tmp_path, monkeypatch):
+    # When a PDF can't be saved incrementally (PyMuPDF refuses, e.g. it repaired
+    # the file on open), we fall back to a full save to a temp file and swap it
+    # in -- still producing a correct, searchable PDF and cleaning up the temp.
+    src = tmp_path / "src.pdf"
+    _source_pdf(src, n=1)
+    page = _page(612, 792, [
+        TranscribedLine(text="fallback works", box=PixelBox(x0=72, y0=120, x1=400, y1=160)),
+    ], "fallback works")
+    out = tmp_path / "fb.pdf"
+
+    real_save = fitz.Document.save
+
+    def reject_incremental(self, *args, **kwargs):
+        if kwargs.get("incremental"):
+            raise RuntimeError("simulated: incremental save not possible")
+        return real_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(fitz.Document, "save", reject_incremental)
+    write_searchable_pdf_over_source(src, [page], out)
+
+    with fitz.open(out) as doc:
+        text = doc[0].get_text()
+        assert "fallback" in text and "ORIGINAL 1" in text
+    assert not out.with_name(out.name + ".tmp").exists()  # temp swapped in & gone

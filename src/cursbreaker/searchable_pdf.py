@@ -13,6 +13,8 @@ on screen, but harvested by every PDF text extractor and search index.
 from __future__ import annotations
 
 import io
+import os
+import shutil
 from pathlib import Path
 
 import fitz
@@ -81,18 +83,54 @@ def write_searchable_pdf_over_source(
     """Searchable PDF for a *PDF* input: overlay the invisible OCR text onto a
     copy of the original PDF, preserving its images/vectors, page sizes and
     orientation exactly -- no re-rasterization, so the user keeps their original
-    image quality. ``pages[i]`` corresponds to source page ``i``."""
-    doc = fitz.open(str(src_pdf_path))
-    try:
-        if len(pages) > doc.page_count:
+    image quality. ``pages[i]`` corresponds to source page ``i``.
+
+    The text layer is *appended* to a byte-for-byte copy of the source with an
+    incremental save: PyMuPDF writes only the new overlay objects (a few KB per
+    page) to the end of the file, never rewriting or serializing the whole
+    document. Memory stays flat no matter how large the PDF is -- the earlier
+    approach built the entire PDF in RAM (``doc.tobytes()``) and could raise
+    ``MemoryError`` on big files -- and the user's original bytes are left
+    untouched (the output is the original with the searchable layer appended).
+    If a particular PDF can't be saved incrementally (e.g. PyMuPDF had to repair
+    it on open), we fall back to a full save, still streamed to a file rather
+    than held in memory."""
+    src_pdf_path = Path(src_pdf_path)
+    out_path = Path(out_path)
+    # Validate against the source before creating any output file.
+    with fitz.open(str(src_pdf_path)) as src:
+        if len(pages) > src.page_count:
             raise ValueError("more OCR pages than the source PDF has")
+    # Copy first, then open the copy: an incremental save can only append to a
+    # file that already holds the original, and this keeps the source read-only.
+    shutil.copyfile(src_pdf_path, out_path)
+    doc = fitz.open(str(out_path))
+    tmp = None
+    try:
         for i, page_result in enumerate(pages):
             _overlay_text(doc[i], page_result)
-        # garbage=3 drops unused objects; deflate compresses our added text
-        # streams. Already-compressed page images (JPEG/Flate) are left untouched.
-        doc.save(str(out_path), garbage=3, deflate=True)
+        try:
+            # Append only our new objects to the copied original; deflate
+            # compresses the added text streams. Existing page images are
+            # untouched (not re-encoded).
+            doc.save(
+                str(out_path),
+                incremental=True,
+                encryption=fitz.PDF_ENCRYPT_KEEP,
+                deflate=True,
+            )
+        except Exception:
+            # Some inputs can't be saved incrementally (e.g. a PDF PyMuPDF had to
+            # repair on open). Full-save to a sibling temp file and swap it in
+            # after closing -- a full save streams to the file, so still no
+            # whole-document blob in memory, and closing first lets the replace
+            # succeed on Windows, where an open file can't be replaced.
+            tmp = out_path.with_name(out_path.name + ".tmp")
+            doc.save(str(tmp), garbage=3, deflate=True)
     finally:
         doc.close()
+    if tmp is not None:
+        os.replace(tmp, out_path)
 
 
 def write_searchable_pdf_from_images(
