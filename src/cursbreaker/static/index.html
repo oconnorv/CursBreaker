@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=33" />
+  <link rel="stylesheet" href="/static/styles.css?v=34" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -53,8 +53,12 @@
             <div class="row">
               <input type="password" id="api_key" placeholder="Paste your key" autocomplete="off"
                      aria-describedby="api_key-hint" />
-              <button id="save-key" class="btn small" type="button">Save key</button>
-              <button id="clear-key" class="btn small" type="button">Clear</button>
+              <!-- Grouped so the pair wraps under the field together, rather than
+                   one button dropping to its own line in a narrow sidebar. -->
+              <div class="row-btns">
+                <button id="save-key" class="btn small" type="button">Save key</button>
+                <button id="clear-key" class="btn small" type="button">Clear</button>
+              </div>
             </div>
             <p id="api_key-hint" class="hint">Stored locally on this machine; sent only to Google's Gemini API, never anywhere else.</p>
             <details class="advanced keyhelp">

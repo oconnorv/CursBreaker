@@ -116,20 +116,32 @@ h1 { margin: 0; font-size: 22px; }
 .theme-radio:checked + .theme-seg { background: var(--text); color: var(--panel); font-weight: 600; }
 .theme-radio:focus-visible + .theme-seg { outline: 3px solid var(--focus); outline-offset: -3px; }
 
-/* Wide screens: Settings becomes a sidebar (holding the key/Tesseract status
-   and all config) so the working area -- upload, estimate, progress, results --
-   starts at the top of the main column instead of below a tall form. The page
-   widens to use the side margins; narrow screens fall back to a single stack. */
+/* Settings sits BESIDE the working column (upload, estimate, progress, results)
+   wherever the two fit, so the working area starts at the top of its own column
+   instead of below a tall form, and the page uses the side margins.
+
+   The sidebar is a share of the width rather than a fixed 360px: it gives back
+   space as the window narrows and stops at 250px, which keeps the pair side by
+   side on half-screen windows and scaled displays (a 150%-scaled 1440 desktop
+   reports ~960 CSS px -- right at the old breakpoint, which stacked it). Only
+   below 700px, where two columns genuinely stop working, does the page fall
+   back to the original single stack (Settings first). */
 main {
   max-width: 1160px; margin: 0 auto; padding: 8px 20px 60px;
-  display: grid; grid-template-columns: 360px minmax(0, 1fr);
+  display: grid; grid-template-columns: minmax(250px, 32%) minmax(0, 1fr);
   align-items: start; gap: 18px;
 }
 .work-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 /* Keep the settings/status sidebar in view while the results column scrolls. */
 #settings-card { position: sticky; top: 12px; }
 
-@media (max-width: 960px) {
+/* A shrunken sidebar can't hold the Advanced pane's two-up fields legibly, so
+   stack them before they get too narrow to read. */
+@media (max-width: 1100px) {
+  #settings-card .grid2 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
   main { grid-template-columns: 1fr; max-width: 880px; }
   #settings-card { position: static; }
 }
@@ -187,8 +199,11 @@ input[type=text], input[type=password], input[type=number], select, input:not([t
 }
 ::placeholder { color: var(--muted); opacity: 1; }
 
-.row { display: flex; gap: 8px; }
-.row input { flex: 1; }
+/* Input + its buttons on one line, wrapping the buttons underneath once the
+   field would be squeezed below a readable width (a narrow Settings sidebar). */
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row input { flex: 1 1 150px; min-width: 0; }
+.row-btns { display: flex; gap: 8px; flex: none; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .check { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0; font-size: 14px; }
 .radio { display: block; margin: 6px 0; font-size: 14px; }
