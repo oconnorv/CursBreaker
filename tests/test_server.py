@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cursbreaker import server
+from cursbreaker.models import TokenUsage
 from cursbreaker.server import app
 
 client = TestClient(app)
@@ -307,12 +309,114 @@ def test_index_credits_mark_humphries_and_authorship():
 
 def test_index_explains_how_to_get_an_api_key():
     # Non-technical users (GLAM staff) need an in-app pointer to creating a key,
-    # not just an empty field. The collapsed help links to AI Studio, names the
-    # create step, and reassures that there's a free tier.
+    # not just an empty field. The help is now per provider (each service has
+    # its own console), so the markup carries the collapsed container and the
+    # browser fills it from /api/providers -- which must therefore supply a
+    # real sign-up link for every service on offer.
     html = client.get("/").text
-    assert "aistudio.google.com" in html
-    assert "Create API key" in html
-    assert "free" in html.lower()
+    assert 'id="keyhelp-summary"' in html
+    assert 'id="keyhelp-body"' in html
+
+    providers = client.get("/api/providers").json()["providers"]
+    assert providers, "the picker would be empty"
+    for entry in providers:
+        assert entry["console_url"].startswith("https://"), entry
+        assert entry["label"] and entry["short_label"], entry
+
+
+def test_providers_endpoint_describes_every_supported_service():
+    data = client.get("/api/providers").json()
+    by_id = {p["id"]: p for p in data["providers"]}
+    assert set(by_id) == {"gemini", "anthropic", "openai"}
+    # The key field is published so the browser never hardcodes the mapping.
+    assert by_id["anthropic"]["key_field"] == "anthropic_api_key"
+    assert by_id["openai"]["key_field"] == "openai_api_key"
+    assert by_id["gemini"]["key_field"] == "api_key"
+    # Environment overrides are advertised so the UI can name the right one.
+    assert "ANTHROPIC_API_KEY" in by_id["anthropic"]["env_vars"]
+    assert "OPENAI_API_KEY" in by_id["openai"]["env_vars"]
+    assert "GEMINI_API_KEY" in by_id["gemini"]["env_vars"]
+    # OpenAI's estimate caveat must reach the UI rather than surprising a user.
+    assert by_id["openai"]["counts_input_tokens"] is False
+    assert by_id["openai"]["notes"]
+    assert by_id["gemini"]["counts_input_tokens"] is True
+
+
+def test_switching_provider_swaps_models_and_keeps_both_keys():
+    # The point of per-provider keys: a user who holds two keys can move
+    # between services without re-pasting anything, and the model follows.
+    client.post("/api/settings", json={
+        "provider": "gemini", "api_key": "AIza_gemini_key_123456"
+    })
+    client.post("/api/settings", json={
+        "provider": "anthropic", "anthropic_api_key": "sk-ant-key-123456"
+    })
+
+    data = client.get("/api/settings").json()
+    assert data["provider"] == "anthropic"
+    # A Gemini model can't run on Claude, so the backend reconciled it.
+    assert data["transcription_model"] == "claude-opus-5"
+    assert data["detection_model"] == "claude-opus-5"
+    assert data["keys"]["gemini"]["set"] is True
+    assert data["keys"]["anthropic"]["set"] is True
+    # No key text ever reaches the browser.
+    assert "sk-ant-key-123456" not in repr(data)
+    assert "AIza_gemini_key_123456" not in repr(data)
+
+    back = client.post("/api/settings", json={"provider": "gemini"}).json()
+    assert back["transcription_model"].startswith("gemini-")
+    assert back["keys"]["gemini"]["set"] is True
+
+
+def test_clearing_a_key_only_clears_that_providers_key():
+    client.post("/api/settings", json={"api_key": "AIza_gemini_key_123456"})
+    client.post("/api/settings", json={"anthropic_api_key": "sk-ant-key-123456"})
+
+    client.delete("/api/settings/api_key?provider=anthropic")
+    keys = client.get("/api/settings").json()["keys"]
+    assert keys["anthropic"]["set"] is False
+    assert keys["gemini"]["set"] is True
+
+
+def test_models_endpoint_is_scoped_to_one_provider():
+    gem = client.get("/api/models?provider=gemini").json()
+    assert gem["provider"] == "gemini"
+    assert all(m["id"].startswith("gemini-") for m in gem["models"])
+
+    ant = client.get("/api/models?provider=anthropic").json()
+    assert [m["id"] for m in ant["models"]] == [
+        "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"
+    ]
+    assert "claude.com" in ant["pricing_url"]
+
+
+def test_openai_models_are_curated_and_priced():
+    data = client.get("/api/models?provider=openai").json()
+    assert data["provider"] == "openai"
+    assert [m["id"] for m in data["models"]] == [
+        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+    ]
+    # Every listed model must carry a real rate: a 0.00 would quietly render
+    # as a free run rather than as "no published price".
+    assert all(
+        m["input_per_mtok"] > 0 and m["output_per_mtok"] > 0
+        for m in data["models"]
+    )
+    assert "openai.com" in data["pricing_url"]
+
+
+def test_transcribing_without_the_active_providers_key_names_that_provider(png_path):
+    # Telling a Claude user to add a "Gemini API key" would send them to the
+    # wrong console entirely, so the guard names the service they picked.
+    client.post("/api/settings", json={"provider": "anthropic"})
+    client.delete("/api/settings/api_key?provider=anthropic")
+    with open(png_path, "rb") as fh:
+        up = client.post(
+            "/api/upload", files={"files": ("sample.png", fh, "image/png")}
+        ).json()
+    r = client.post("/api/process", json={"file_ids": [up["files"][0]["id"]]})
+    assert r.status_code == 400
+    assert "Anthropic Claude" in r.json()["detail"]
 
 
 def test_index_has_global_live_region_announcer():
@@ -892,7 +996,7 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
         json={
             "content_type": "handwriting",
             "mode": "one_pass",
-            "transcription_model": "gemini-3.1-flash-lite",  # $0.25 in / $1.50 out
+            "transcription_model": "gemini-3.8-flash",  # $0.75 in / $3.75 out
             "api_key": "AIza_estimate_test_key_WXYZ",
         },
     )
@@ -907,12 +1011,12 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
     # Cost is a range derived from the model's published price; one-pass output
     # range is 1800..5400 tokens/page.
-    expected_low = 1000 / 1_000_000 * 0.25 + 1800 / 1_000_000 * 1.50
-    expected_high = 1000 / 1_000_000 * 0.25 + 5400 / 1_000_000 * 1.50
+    expected_low = 1000 / 1_000_000 * 0.75 + 1800 / 1_000_000 * 3.75
+    expected_high = 1000 / 1_000_000 * 0.75 + 5400 / 1_000_000 * 3.75
     assert r["cost_low"] == pytest.approx(expected_low)
     assert r["cost_high"] == pytest.approx(expected_high)
-    assert r["model"] == "gemini-3.1-flash-lite"
-    assert r["price_input_per_mtok"] == 0.25
+    assert r["model"] == "gemini-3.8-flash"
+    assert r["price_input_per_mtok"] == 0.75
 
 
 def test_estimate_no_staged_files_is_400():
@@ -920,25 +1024,114 @@ def test_estimate_no_staged_files_is_400():
     assert r.status_code == 400
 
 
+def test_cost_is_priced_at_the_model_that_actually_ran():
+    # A Gemini job can fall back when the configured model turns out to be
+    # retired, and Pro/Flash are ~3x apart, so pricing the run at the
+    # configured model would report a confidently wrong number.
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = ["gemini-3.8-flash"]
+
+    job = {"model": "gemini-3.1-pro-preview", "_provider": _P()}
+    assert _priced_model(job) == "gemini-3.8-flash"
+
+    body = server._usage_to_dict(
+        TokenUsage(input=1_000_000, output=1_000_000, calls=1), _priced_model(job)
+    )
+    assert body["price_input_per_mtok"] == 0.75     # Flash's rate, not Pro's
+    assert body["cost"] == pytest.approx(0.75 + 3.75)
+
+
+def test_a_run_spanning_two_models_reports_tokens_without_a_dollar_figure():
+    # The usage counters are one pooled total and can't be split between the
+    # models, so there is no correct dollar figure -- tokens only is at least
+    # true.
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = ["gemini-3.1-pro-preview", "gemini-3.8-flash"]
+
+    job = {"model": "gemini-3.1-pro-preview", "_provider": _P()}
+    assert _priced_model(job) is None
+    body = server._usage_to_dict(TokenUsage(input=10, output=10, calls=1), None)
+    assert body["cost"] is None
+    assert body["total"] == 20
+
+
+def test_cost_falls_back_to_the_configured_model_before_anything_runs():
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = []
+
+    assert _priced_model({"model": "gemini-3.8-flash", "_provider": _P()}) == (
+        "gemini-3.8-flash"
+    )
+    assert _priced_model({"model": "gemini-3.8-flash"}) == "gemini-3.8-flash"
+
+
 def test_models_endpoint_returns_priced_catalog():
     body = client.get("/api/models").json()
     ids = [m["id"] for m in body["models"]]
     # Pro is first (the dropdown's default position + the saved default model).
     assert ids[0] == "gemini-3.1-pro-preview"
-    assert "gemini-3.5-flash" in ids
-    assert "gemini-3.1-flash-lite" in ids
+    assert "gemini-3.8-flash" in ids
     assert body["prices_as_of"]            # shown in the UI for transparency
-    flash = next(m for m in body["models"] if m["id"] == "gemini-3.5-flash")
-    assert flash["input_per_mtok"] == 1.50 and flash["output_per_mtok"] == 9.00
+    flash = next(m for m in body["models"] if m["id"] == "gemini-3.8-flash")
+    assert flash["input_per_mtok"] == 0.75 and flash["output_per_mtok"] == 3.75
     pro = next(m for m in body["models"] if m["id"] == "gemini-3.1-pro-preview")
     assert pro["tier_threshold"] == 200_000   # tiered pricing is exposed
 
 
+def test_dropdown_quotes_the_standard_rate_once_the_intro_period_ends(monkeypatch):
+    # End to end, not just the resolver: on 2027-01-01 the published-price hint
+    # in Settings must show the rate actually in force, with nobody editing
+    # anything. Before this, it would have quoted the withdrawn intro rate.
+    from datetime import date as _date
+
+    from cursbreaker import pricing
+
+    class _Frozen(_date):
+        @classmethod
+        def today(cls):
+            return cls(2027, 1, 1)
+
+    today = [m for m in client.get("/api/models?provider=gemini").json()["models"]
+             if m["id"] == "gemini-3.8-flash"][0]
+    assert (today["input_per_mtok"], today["output_per_mtok"]) == (0.75, 3.75)
+
+    monkeypatch.setattr(pricing, "date", _Frozen)
+    later = [m for m in client.get("/api/models?provider=gemini").json()["models"]
+             if m["id"] == "gemini-3.8-flash"][0]
+    assert (later["input_per_mtok"], later["output_per_mtok"]) == (1.50, 7.50)
+
+
+def test_reported_cost_uses_the_standard_rate_after_the_intro_period(monkeypatch):
+    from datetime import date as _date
+
+    from cursbreaker import pricing
+
+    class _Frozen(_date):
+        @classmethod
+        def today(cls):
+            return cls(2027, 1, 1)
+
+    usage = TokenUsage(input=1_000_000, output=1_000_000, calls=1)
+    before = server._usage_to_dict(usage, "gemini-3.8-flash")
+    assert before["cost"] == pytest.approx(0.75 + 3.75)
+
+    monkeypatch.setattr(pricing, "date", _Frozen)
+    after = server._usage_to_dict(usage, "gemini-3.8-flash")
+    assert after["cost"] == pytest.approx(1.50 + 7.50)
+    assert after["price_input_per_mtok"] == 1.50
+
+
 def test_model_choice_round_trips_through_settings_api():
     r = client.post(
-        "/api/settings", json={"transcription_model": "gemini-3.5-flash"}
+        "/api/settings", json={"transcription_model": "gemini-3.8-flash"}
     ).json()
-    assert r["transcription_model"] == "gemini-3.5-flash"
+    assert r["transcription_model"] == "gemini-3.8-flash"
 
 
 def test_detection_model_follows_transcription_model():
@@ -946,10 +1139,10 @@ def test_detection_model_follows_transcription_model():
     # model keeps detection (two-pass) on the same model, so the priced/reported
     # model can't drift from the one detection actually uses.
     r = client.post(
-        "/api/settings", json={"transcription_model": "gemini-3.1-flash-lite"}
+        "/api/settings", json={"transcription_model": "gemini-3.8-flash"}
     ).json()
-    assert r["transcription_model"] == "gemini-3.1-flash-lite"
-    assert r["detection_model"] == "gemini-3.1-flash-lite"
+    assert r["transcription_model"] == "gemini-3.8-flash"
+    assert r["detection_model"] == "gemini-3.8-flash"
 
 
 def test_index_has_cost_controls():

@@ -50,6 +50,7 @@ function gatherSettings() {
   // One picker drives both models: detection (two-pass) follows transcription.
   const model = $("model").value;
   if (model) { s.transcription_model = model; s.detection_model = model; }
+  s.provider = currentProvider();
   const mode = document.querySelector("input[name=mode]:checked");
   if (mode) s.mode = mode.value;
   const ct = document.querySelector("input[name=content_type]:checked");
@@ -60,20 +61,33 @@ function gatherSettings() {
 function applyKeyStatus(data) {
   const badge = $("key-status");
   const info = $("key-info");
+  const provider = providerInfo(activeProvider);
+  const name = provider ? provider.short_label : "API";
+  const envVar = (provider && provider.env_vars && provider.env_vars[0]) || "";
   info.hidden = false;
   if (data.api_key_set) {
     badge.textContent = "Key saved"; badge.className = "badge ok";
     info.className = "key-info";
     const where = data.api_key_source === "env"
-      ? `from <span class="mono">GEMINI_API_KEY</span> environment variable`
+      ? `from the <span class="mono">${escapeHtml(envVar)}</span> environment variable`
       : "stored locally on this machine";
     info.innerHTML =
-      `<span class="glyph" aria-hidden="true">✓</span><span>Gemini key ${where}: <span class="mono">${escapeHtml(data.api_key_hint || "")}</span></span>`;
+      `<span class="glyph" aria-hidden="true">✓</span><span>${escapeHtml(name)} key ${where}: <span class="mono">${escapeHtml(data.api_key_hint || "")}</span></span>`;
   } else {
     badge.textContent = "No API key"; badge.className = "badge warn";
     info.className = "key-info warn";
     info.innerHTML =
-      `<span class="glyph" aria-hidden="true">!</span><span>No Gemini key stored. Paste one above or set <span class="mono">GEMINI_API_KEY</span>.</span>`;
+      `<span class="glyph" aria-hidden="true">!</span><span>No ${escapeHtml(name)} key stored. Paste one above`
+      + (envVar ? ` or set <span class="mono">${escapeHtml(envVar)}</span>` : "") + `.</span>`;
+  }
+  // Keys for the services the user isn't currently on: worth showing, so it's
+  // obvious that switching provider won't mean pasting a key again.
+  const others = Object.entries(data.keys || {})
+    .filter(([id, st]) => id !== activeProvider && st.set)
+    .map(([id]) => (providerInfo(id) || {}).short_label || id);
+  if (others.length) {
+    info.innerHTML +=
+      `<span class="muted"> &nbsp;Also saved: ${escapeHtml(others.join(", "))}.</span>`;
   }
 }
 
@@ -106,14 +120,16 @@ async function verifyKey(announceValid = false) {
 
 async function loadSettings() {
   const s = await api("GET", "/api/settings");
+  if (s.provider) activeProvider = s.provider;
+  applyProviderChrome();
   for (const id of [...TEXT, ...NUMERIC]) if (s[id] !== undefined) $(id).value = s[id];
   for (const id of BOOL) if (s[id] !== undefined) $(id).checked = s[id];
   // Model dropdown (options populated by loadModelCatalog before this runs).
   const sel = $("model");
   if (s.transcription_model) sel.value = s.transcription_model;
   if (!sel.value && sel.options.length) {
-    // A saved model that isn't in the curated catalog -> fall back to the first
-    // (and persist it so the UI and the backend agree on what will run).
+    // A saved model that isn't in this provider's catalog -> fall back to the
+    // first (and persist it so the UI and the backend agree on what will run).
     sel.value = sel.options[0].value;
     saveSettings(gatherSettings());
   }
@@ -177,16 +193,22 @@ async function saveSettings(partial) {
   applyKeyStatus(data);
 }
 
-// Curated model catalog (with published prices) backing the dropdown + the
-// automatic cost estimate. Populated once from the backend.
+// Model catalog backing the dropdown + the automatic cost estimate. Reloaded
+// whenever the provider changes: each service has its own models, and for a
+// service we hold no price list for, the models come from the user's own key.
 let modelCatalog = [];
 let pricesAsOf = "";
+// Empty until /api/models answers; the fallback is applied where it's used,
+// because PRICING_URL is declared further down this file.
+let pricingUrl = "";
 
-async function loadModelCatalog() {
+async function loadModelCatalog(provider) {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
   try {
-    const data = await api("GET", "/api/models");
+    const data = await api("GET", "/api/models" + qs);
     modelCatalog = data.models || [];
     pricesAsOf = data.prices_as_of || "";
+    pricingUrl = data.pricing_url || "";
     const sel = $("model");
     sel.innerHTML = "";
     for (const m of modelCatalog) {
@@ -200,6 +222,111 @@ async function loadModelCatalog() {
 
 function modelInfo(id) {
   return modelCatalog.find((m) => m.id === id) || null;
+}
+
+// ---- providers ---------------------------------------------------------- //
+// The services the user can pick between, described by the backend so the
+// registry stays in one place (src/cursbreaker/providers.py).
+let providers = [];
+let activeProvider = "gemini";
+
+function providerInfo(id) {
+  return providers.find((p) => p.id === id) || providers[0] || null;
+}
+
+// Which Settings field holds a provider's key. Supplied by the backend so the
+// mapping lives in exactly one place (providers.PROVIDERS).
+function keyFieldFor(id) {
+  const info = providerInfo(id);
+  return (info && info.key_field) || "api_key";
+}
+
+function currentProvider() {
+  const picked = document.querySelector("input[name=provider]:checked");
+  return picked ? picked.value : activeProvider;
+}
+
+async function loadProviders() {
+  try {
+    const data = await api("GET", "/api/providers");
+    providers = data.providers || [];
+  } catch (e) { return; }
+  const box = $("provider-choices");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const p of providers) {
+    const label = document.createElement("label");
+    label.className = "radio provider-choice";
+    // Just the name here; the caveat for whichever service is *selected*
+    // shows in #provider-note, so the list stays scannable.
+    label.innerHTML =
+      `<input type="radio" name="provider" value="${escapeHtml(p.id)}" /> `
+      + `<b>${escapeHtml(p.label)}</b>`;
+    box.appendChild(label);
+  }
+  for (const r of box.querySelectorAll("input[name=provider]")) {
+    r.addEventListener("change", switchProvider);
+  }
+}
+
+// Switching service: persist the choice first so the backend can reconcile the
+// model (a Gemini model id can't run on Claude), then reload the models and
+// key state that the choice determines.
+async function switchProvider() {
+  const id = currentProvider();
+  activeProvider = id;
+  await saveSettings({ provider: id });
+  await loadModelCatalog(id);
+  await loadSettings();
+  const info = providerInfo(id);
+  if (info) announce(`${info.label} selected.`);
+}
+
+// Provider-specific labels and copy. Everything that named Gemini in the
+// Settings panel is driven from here instead.
+function applyProviderChrome() {
+  const info = providerInfo(activeProvider);
+  if (!info) return;
+  for (const r of document.querySelectorAll("input[name=provider]")) {
+    r.checked = r.value === activeProvider;
+  }
+  const label = $("api_key-label");
+  if (label) {
+    label.innerHTML =
+      `${escapeHtml(info.short_label)} <abbr title="Application Programming Interface">API</abbr> key`;
+  }
+  const keyInput = $("api_key");
+  if (keyInput) keyInput.placeholder = `Paste your ${info.short_label} key`;
+  const hint = $("api_key-hint");
+  if (hint) {
+    hint.textContent =
+      `Stored locally on this machine; sent only to ${info.label}, never anywhere else.`;
+  }
+  const note = $("provider-note");
+  if (note) {
+    note.innerHTML = info.notes
+      ? escapeHtml(info.notes)
+      : `Cost is estimated automatically from ${escapeHtml(info.short_label)}'s published prices before every run.`;
+  }
+  renderKeyHelp(info);
+}
+
+function renderKeyHelp(info) {
+  const summary = $("keyhelp-summary");
+  const body = $("keyhelp-body");
+  if (!summary || !body) return;
+  summary.textContent = `No ${info.short_label} API key? How to get one`;
+  const envVar = (info.env_vars && info.env_vars[0]) || "";
+  body.innerHTML =
+    `<p>An API key is like a password that lets CursBreaker use ${escapeHtml(info.label)} on your behalf. You create your own, in your own account, and it stays on this machine.</p>`
+    + `<ol>`
+    + `<li>Open <a href="${escapeHtml(info.console_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(info.label)}'s API keys page</a> and sign in.</li>`
+    + `<li>Create a new key and copy it &mdash; you usually can't view it again afterwards.</li>`
+    + `<li>Paste it into the box above and click <b>Save key</b>.</li>`
+    + `</ol>`
+    + `<p class="hint">You pay ${escapeHtml(info.label)} directly for what you use; CursBreaker adds nothing.`
+    + (envVar ? ` A site can also set <span class="mono">${escapeHtml(envVar)}</span> in the environment instead, which overrides anything saved here.` : "")
+    + ` <a href="${escapeHtml(info.pricing_url)}" target="_blank" rel="noopener noreferrer">Current pricing &rarr;</a></p>`;
 }
 
 // Show the selected model's published price right under the picker, so the cost
@@ -217,7 +344,7 @@ function updateModelPricingHint() {
   hint.innerHTML =
     `<b>${escapeHtml(m.label)}</b>: ${rates}.`
     + (pricesAsOf ? ` Prices as of ${escapeHtml(pricesAsOf)}, used for the cost estimate (an estimate, not a guarantee).` : "")
-    + ` <a href="${PRICING_URL}" target="_blank" rel="noopener noreferrer">Live pricing</a>.`;
+    + ` <a href="${pricingUrl || PRICING_URL}" target="_blank" rel="noopener noreferrer">Live pricing</a>.`;
 }
 
 // ---- upload / staging --------------------------------------------------- //
@@ -959,7 +1086,7 @@ function priceBasis(t) {
     + `$${Number(t.price_output_per_mtok || 0).toFixed(2)}/1M output`;
 }
 
-// "Gemini 3.5 Flash's published price of $… (prices as of …)" — the model and
+// "Gemini 3.8 Flash's published price of $… (prices as of …)" — the model and
 // date a dollar figure was computed from, for full transparency.
 function priceSource(t) {
   const model = t.model_label ? `${escapeHtml(t.model_label)}'s ` : "";
@@ -1024,14 +1151,23 @@ async function estimateCost() {
 function renderEstimate(d) {
   if (d.billable === false) {
     return `<div class="estimate-line"><span class="glyph" aria-hidden="true">●</span>`
-      + `<span>No Gemini tokens for these ${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span></div>`;
+      + `<span>No tokens for these ${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span></div>`;
   }
   const hasCost = d.cost_low !== null && d.cost_low !== undefined;
+  // A provider that can't price page images up front yields an output-only
+  // figure. That is a FLOOR, not the expected total, and it must not be shown
+  // as one: the image side is usually the larger half of the bill.
+  const partial = d.input_measured === false;
   // Headline: an estimated cost RANGE (output scales with how much text is on
   // the page) -- or a token range when the model has no published price.
   const headline = hasCost
-    ? `<div class="estimate-cost"><span class="estimate-cost-num">~${formatCost(d.cost_low)}–${formatCost(d.cost_high)}</span>`
-      + `<span class="estimate-cost-label">estimated range &mdash; not a guarantee</span></div>`
+    ? `<div class="estimate-cost"><span class="estimate-cost-num">`
+      + `${partial ? "at least " : "~"}${formatCost(d.cost_low)}–${formatCost(d.cost_high)}</span>`
+      + `<span class="estimate-cost-label">`
+      + (partial
+          ? "output only &mdash; the page images cost more on top"
+          : "estimated range &mdash; not a guarantee")
+      + `</span></div>`
     : `<div class="estimate-cost"><span class="estimate-cost-num">${formatTokens(d.total_low)}–${formatTokens(d.total_high)}</span>`
       + `<span class="estimate-cost-label">tokens &mdash; no published price for this model</span></div>`;
   // Supporting detail as bullets rather than a paragraph.
@@ -1040,10 +1176,20 @@ function renderEstimate(d) {
     `<b>${d.files}</b> file(s), <b>${formatTokens(d.pages)}</b> page(s)`
     + (d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "")
   );
-  points.push(
-    `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output_low)}–${formatTokens(d.output_high)}</b> output tokens`
-    + ` <span class="muted">(assuming ~${formatTokens(d.per_page_low)}–${formatTokens(d.per_page_high)} output tokens/page across ${formatTokens(d.pages)} page(s))</span>`
-  );
+  if (partial) {
+    // Never imply the page images are free: this provider just can't be asked
+    // what they cost without running the job.
+    points.push(
+      `~<b>${formatTokens(d.output_low)}–${formatTokens(d.output_high)}</b> output tokens`
+      + ` <span class="muted">(assuming ~${formatTokens(d.per_page_low)}–${formatTokens(d.per_page_high)} output tokens/page across ${formatTokens(d.pages)} page(s)).`
+      + ` ${escapeHtml(d.provider_label || "This service")} can't count image tokens before a run, so the input side &mdash; usually the larger half &mdash; is missing from the figure above. The actual cost shown after the run is complete.</span>`
+    );
+  } else {
+    points.push(
+      `~<b>${formatTokens(d.input)}</b> input + ~<b>${formatTokens(d.output_low)}–${formatTokens(d.output_high)}</b> output tokens`
+      + ` <span class="muted">(assuming ~${formatTokens(d.per_page_low)}–${formatTokens(d.per_page_high)} output tokens/page across ${formatTokens(d.pages)} page(s))</span>`
+    );
+  }
   if (hasCost) {
     points.push(
       `Priced at ${priceBasis(d)}`
@@ -1186,26 +1332,32 @@ async function useThisFolder() {
 }
 
 function wire() {
-  $("save-key").onclick = () => {
+  $("save-key").onclick = async () => {
     const hadKey = $("api_key").value.trim() !== "";
-    saveSettings({ api_key: $("api_key").value }).then(() => {
-      $("api_key").value = "";
-      // A freshly-saved key invalidates any prior "no API key" transcription
-      // error, so clear that stale message immediately.
-      $("action-note").textContent = stagedStatus();
-      if (hadKey) {
-        announce("Gemini API key saved.");
-        verifyKey(true); // confirm the just-pasted key works, and announce it
-      }
-    });
+    const info = providerInfo(activeProvider);
+    const field = keyFieldFor(activeProvider);
+    await saveSettings({ [field]: $("api_key").value });
+    $("api_key").value = "";
+    // A freshly-saved key invalidates any prior "no API key" transcription
+    // error, so clear that stale message immediately.
+    $("action-note").textContent = stagedStatus();
+    if (hadKey) {
+      announce(`${info ? info.short_label : "API"} key saved.`);
+      verifyKey(true); // confirm the just-pasted key works, and announce it
+    }
   };
   $("clear-key").onclick = async () => {
-    if (!confirm("Clear the stored Gemini key from this machine?\n(If GEMINI_API_KEY is set in your environment, that will still be used.)")) return;
-    await api("DELETE", "/api/settings/api_key");
+    const info = providerInfo(activeProvider);
+    const name = info ? info.short_label : "API";
+    const envVar = (info && info.env_vars && info.env_vars[0]) || "";
+    const envNote = envVar
+      ? `\n(If ${envVar} is set in your environment, that will still be used.)` : "";
+    if (!confirm(`Clear the stored ${name} key from this machine?${envNote}`)) return;
+    await api("DELETE", `/api/settings/api_key?provider=${encodeURIComponent(activeProvider)}`);
     $("api_key").value = "";
     $("api_key").removeAttribute("aria-invalid");
     await loadSettings();
-    announce("Gemini API key cleared.");
+    announce(`${name} key cleared.`);
   };
   for (const id of [...TEXT, ...NUMERIC]) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
   for (const id of BOOL) $(id).addEventListener("change", () => saveSettings(gatherSettings()));
@@ -1326,9 +1478,14 @@ async function init() {
   let settingsOpen = "1";
   try { settingsOpen = localStorage.getItem("cb.settings.open") || "1"; } catch (e) {}
   setSettingsOpen(settingsOpen !== "0");
-  // Populate the model dropdown before loading settings, so the saved model can
-  // be selected and its price shown.
-  await loadModelCatalog();
+  // Order matters: the provider list names the services, the saved provider
+  // decides which models to fetch, and only then can settings select one.
+  await loadProviders();
+  try {
+    const s = await api("GET", "/api/settings");
+    if (s.provider) activeProvider = s.provider;
+  } catch (e) { /* fall back to the default provider */ }
+  await loadModelCatalog(activeProvider);
   await loadSettings();
   loadTesseractStatus();
 }

@@ -32,7 +32,13 @@ datas = [("../src/cursbreaker/static", "cursbreaker/static")]
 binaries = []
 hiddenimports = collect_submodules("uvicorn")
 
-for pkg in ("fastapi", "starlette", "google.genai", "pymupdf", "lxml", "pytesseract"):
+# Every provider SDK is bundled, not just the default one: the provider is a
+# runtime setting, so a packaged build that shipped only google.genai would
+# fail the moment a user switched to Claude or OpenAI.
+for pkg in (
+    "fastapi", "starlette", "google.genai", "anthropic", "openai",
+    "pymupdf", "lxml", "pytesseract",
+):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

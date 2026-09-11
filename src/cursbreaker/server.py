@@ -32,7 +32,7 @@ from starlette.background import BackgroundTask
 
 from . import __version__
 from .config import load_settings, save_settings
-from .gemini_client import make_provider
+from .providers import PROVIDERS, make_provider, provider_info
 from .hocr import XHTML_NS
 from .images import SUPPORTED_EXT, count_content_pages, is_supported, pdf_has_text_layer
 from .pipeline import OUTPUT_FORMATS, estimate_usage, process_batch
@@ -40,7 +40,9 @@ from .pricing import (
     CATALOG,
     PRICES_AS_OF,
     PRICING_URL,
+    catalog_for,
     cost_for,
+    current_rates,
     effective_rates,
     pricing_for,
 )
@@ -118,10 +120,11 @@ def get_settings():
 async def update_settings(payload: dict):
     settings = load_settings()
     fields = type(settings).model_fields
+    key_fields = {info.key_field for info in PROVIDERS.values()}
     for key, value in payload.items():
-        if key == "api_key":
+        if key in key_fields:
             if value:  # never blank out a saved key on a no-op save
-                settings.api_key = value
+                setattr(settings, key, value)
         elif key in fields:
             setattr(settings, key, value)
     settings.normalize_content()  # migrate a posted legacy "mixed" value
@@ -131,9 +134,15 @@ async def update_settings(payload: dict):
 
 
 @app.delete("/api/settings/api_key")
-def clear_api_key():
+def clear_api_key(provider: str | None = None):
+    """Forget one provider's stored key. Defaults to the active provider, so
+    the Settings panel's Clear button needs no argument; an explicit
+    ``?provider=`` lets a user drop a key for a service they've switched away
+    from. An env-var key is not ours to clear -- ``public_dict`` keeps
+    reporting it, with source 'env'."""
     settings = load_settings()
-    settings.api_key = ""
+    info = provider_info(provider or settings.provider)
+    setattr(settings, info.key_field, "")
     save_settings(settings)
     return settings.public_dict()
 
@@ -161,35 +170,73 @@ def tesseract_status():
 
 @app.get("/api/key-status")
 def key_status():
-    """Cheap, generation-free check that the stored Gemini key still works, so a
-    revoked/expired key surfaces in Settings before a transcription fails. Uses
-    the free ListModels endpoint (no token/quota cost)."""
-    from .gemini_client import check_api_key
+    """Cheap, generation-free check that the active provider's stored key still
+    works, so a revoked/expired key surfaces in Settings before a transcription
+    fails. Every provider's probe uses its free list-models endpoint, so this
+    costs no tokens or quota."""
+    from .providers import check_api_key
 
     st = check_api_key(load_settings())
-    return {"state": st.state, "message": st.message}
+    return {"state": st.state, "message": st.message, "provider": st.provider}
+
+
+@app.get("/api/providers")
+def list_providers():
+    """The services a user can choose between, with everything the Settings
+    panel needs to render one: where to get a key, which environment variables
+    override it, and the caveats that differ by provider (whether a cost
+    estimate is possible at all, and whether models come from our price list or
+    from the user's own key)."""
+    return {
+        "providers": [
+            {
+                "id": info.id,
+                "label": info.label,
+                "short_label": info.short_label,
+                # Which Settings field POST /api/settings writes this key to,
+                # so the browser never has to hardcode the mapping.
+                "key_field": info.key_field,
+                "console_url": info.console_url,
+                "pricing_url": info.pricing_url,
+                "env_vars": list(info.env_vars),
+                "counts_input_tokens": info.counts_input_tokens,
+                "notes": info.notes,
+            }
+            for info in PROVIDERS.values()
+        ],
+        "default": load_settings().provider,
+    }
 
 
 @app.get("/api/models")
-def list_models():
-    """The curated model catalog with published prices, for the dropdown +
-    automatic cost estimate. A fixed list (not the key's live ListModels) so the
-    selectable models and their prices stay in lockstep."""
+def list_models(provider: str | None = None):
+    """The curated model catalog for one provider (default: the active one),
+    with published prices, for the dropdown + automatic cost estimate.
+
+    A fixed list per provider (not the key's live models) so the selectable
+    models and their prices stay in lockstep."""
+    settings = load_settings()
+    info = provider_info(provider or settings.provider)
+    def _entry(m):
+        # Rates resolved for today: an entry may carry an announced future
+        # price, and the UI must quote the one actually in force.
+        in_rate, out_rate = current_rates(m)
+        return {
+            "id": m.model,
+            "label": m.label,
+            "provider": m.provider,
+            "input_per_mtok": in_rate,
+            "output_per_mtok": out_rate,
+            "tier_threshold": m.tier_threshold,
+            "input_per_mtok_high": m.input_per_mtok_high,
+            "output_per_mtok_high": m.output_per_mtok_high,
+        }
+
     return {
-        "models": [
-            {
-                "id": m.model,
-                "label": m.label,
-                "input_per_mtok": m.input_per_mtok,
-                "output_per_mtok": m.output_per_mtok,
-                "tier_threshold": m.tier_threshold,
-                "input_per_mtok_high": m.input_per_mtok_high,
-                "output_per_mtok_high": m.output_per_mtok_high,
-            }
-            for m in CATALOG
-        ],
+        "provider": info.id,
+        "models": [_entry(m) for m in catalog_for(info.id)],
         "prices_as_of": PRICES_AS_OF,
-        "pricing_url": PRICING_URL,
+        "pricing_url": info.pricing_url,
     }
 
 
@@ -518,7 +565,9 @@ def estimate(req: EstimateRequest):
 
     if not settings.resolved_api_key():
         raise HTTPException(
-            400, "No Gemini API key set. Add one in Settings to estimate cost."
+            400,
+            f"No {provider_info(settings.provider).label} API key set. Add one "
+            "in Settings to estimate cost.",
         )
 
     try:
@@ -540,7 +589,11 @@ def process(req: ProcessRequest):
     if req.mode in ("one_pass", "two_pass"):
         settings.mode = req.mode
     if not settings.resolved_api_key():
-        raise HTTPException(400, "No Gemini API key set. Add one in Settings.")
+        raise HTTPException(
+            400,
+            f"No {provider_info(settings.provider).label} API key set. Add one "
+            "in Settings.",
+        )
 
     # Keep only recognized output kinds; empty (nothing picked, or all unknown)
     # falls through to "create everything" in the pipeline.
@@ -674,11 +727,11 @@ def _run_job(job_id, paths, settings, out_dir, outputs=None, *, skip_text_overla
                     for n in r.image_names
                 ],
                 "error": r.error,
-                "tokens": _usage_to_dict(r.token_usage, job["model"]),
+                "tokens": _usage_to_dict(r.token_usage, _priced_model(job)),
             }
             for r in results
         ]
-        job["tokens"] = _usage_to_dict(provider.usage, job["model"])
+        job["tokens"] = _usage_to_dict(provider.usage, _priced_model(job))
         # Completed files (if any) are kept and downloadable in every stop case.
         # "stopped" (user ended at a disk-full pause) is distinct from a manual
         # "cancelled" so the UI can explain what happened.
@@ -714,7 +767,7 @@ def _usage_to_dict(usage, model=None) -> dict:
             in_rate, out_rate = effective_rates(pricing, usage)
             d["cost"] = cost_for(pricing, usage)
         else:
-            in_rate, out_rate = pricing.input_per_mtok, pricing.output_per_mtok
+            in_rate, out_rate = current_rates(pricing)
             d["cost"] = 0.0
         d["model"] = pricing.model
         d["model_label"] = pricing.label
@@ -726,6 +779,27 @@ def _usage_to_dict(usage, model=None) -> dict:
         d["price_output_per_mtok"] = 0.0
         d["cost"] = None
     return d
+
+
+def _priced_model(job: dict) -> str | None:
+    """Which model the cost figure should be priced at.
+
+    Normally the one the job was started with. But a Gemini job can fall back
+    to another model mid-run when the configured one turns out to be retired,
+    and the catalog's models are ~3x apart in price, so pricing a fallback run
+    at the configured model's rate would report a confidently wrong number.
+
+    When exactly one model actually ran, price that. When a run spanned more
+    than one, the usage counters are a single pooled total that can't be split
+    between them, so there is no correct dollar figure -- return ``None`` and
+    let the UI fall back to reporting tokens only, which is at least true."""
+    provider = job.get("_provider")
+    used = list(getattr(provider, "models_used", []) or [])
+    if len(used) == 1:
+        return used[0]
+    if len(used) > 1:
+        return None
+    return job.get("model")
 
 
 def _public_job(job: dict) -> dict:
@@ -741,7 +815,7 @@ def _public_job(job: dict) -> dict:
     provider = job.get("_provider")
     usage = getattr(provider, "usage", None) if provider is not None else None
     if usage is not None:
-        out["tokens"] = _usage_to_dict(usage, job.get("model"))
+        out["tokens"] = _usage_to_dict(usage, _priced_model(job))
     return out
 
 

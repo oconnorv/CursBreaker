@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CursBreaker</title>
-  <link rel="stylesheet" href="/static/styles.css?v=34" />
+  <link rel="stylesheet" href="/static/styles.css?v=36" />
   <link rel="icon" type="image/png" href="/static/favicon.png" />
   <script>
     /* Apply the saved theme before first paint so light-theme users see no flash. */
@@ -24,7 +24,7 @@
       <span class="logo" aria-hidden="true">CB</span>
       <div>
         <h1>CursBreaker</h1>
-        <p class="tagline">Transcribe handwriting using Google Gemini</p>
+        <p class="tagline">Transcribe handwriting using Gemini, Claude or OpenAI</p>
       </div>
     </div>
     <div class="theme-switch" role="radiogroup" aria-label="Color theme">
@@ -48,8 +48,18 @@
       </div>
 
       <div id="settings-body" class="settings-body">
+          <!-- Which hosted service transcribes. Institutions often approve one
+               AI vendor and not others, so this is a first-class choice rather
+               than a build-time decision; each provider keeps its own saved
+               key, so switching back and forth never means re-pasting. -->
+          <fieldset class="field">
+            <legend>AI service</legend>
+            <div id="provider-choices" class="provider-choices"></div>
+            <p id="provider-note" class="hint" role="status" aria-live="polite"></p>
+          </fieldset>
+
           <div class="field">
-            <label for="api_key">Gemini <abbr title="Application Programming Interface">API</abbr> key</label>
+            <label for="api_key" id="api_key-label">Gemini <abbr title="Application Programming Interface">API</abbr> key</label>
             <div class="row">
               <input type="password" id="api_key" placeholder="Paste your key" autocomplete="off"
                      aria-describedby="api_key-hint" />
@@ -60,27 +70,22 @@
                 <button id="clear-key" class="btn small" type="button">Clear</button>
               </div>
             </div>
-            <p id="api_key-hint" class="hint">Stored locally on this machine; sent only to Google's Gemini API, never anywhere else.</p>
+            <!-- Text set per provider by applyProviderChrome(); the default
+                 here is what a no-JS/pre-hydration render shows. -->
+            <p id="api_key-hint" class="hint">Stored locally on this machine; sent only to the AI service you choose, never anywhere else.</p>
+            <!-- Filled per provider by renderKeyHelp(); the steps and the
+                 console link differ for each service. -->
             <details class="advanced keyhelp">
-              <summary>No API key? How to get one (it's free to start)</summary>
-              <div class="keyhelp-body">
-                <p>An API key is like a password that lets CursBreaker use Google's Gemini AI on your behalf. You create your own &mdash; it takes a couple of minutes and you need only a Google account (the same one you use for Gmail).</p>
-                <ol>
-                  <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a> and sign in with your Google account.</li>
-                  <li>Click <b>Create API key</b>. If it asks which project to use, let it make a new one &mdash; the name doesn't matter.</li>
-                  <li>Copy the key it shows you &mdash; a long string that starts with <code>AIza&hellip;</code></li>
-                  <li>Paste it into the box above and click <b>Save key</b>.</li>
-                </ol>
-                <p class="hint">Google has a free tier (no credit card required) with daily limits; heavier use needs billing. CursBreaker estimates the cost before every run. <a href="https://github.com/oconnorv/CursBreaker#get-a-gemini-api-key" target="_blank" rel="noopener noreferrer">Full step-by-step guide &amp; pricing &rarr;</a></p>
-              </div>
+              <summary id="keyhelp-summary">No API key? How to get one</summary>
+              <div class="keyhelp-body" id="keyhelp-body"></div>
             </details>
             <div id="key-info" class="key-info" role="status" aria-live="polite" hidden></div>
           </div>
 
           <fieldset class="field">
             <legend>Content type</legend>
-            <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; Gemini transcribes the whole page (printed text included).</label>
-            <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract <abbr title="optical character recognition">OCR</abbr>s locally; no Gemini call.</label>
+            <label class="radio"><input type="radio" name="content_type" value="handwriting" /> <b>Handwriting</b> &mdash; the AI service transcribes the whole page (printed text included).</label>
+            <label class="radio"><input type="radio" name="content_type" value="text" /> <b>Printed only</b> &mdash; Tesseract <abbr title="optical character recognition">OCR</abbr>s locally; no API call, no cost.</label>
           </fieldset>
           <div id="tesseract-info" class="key-info" role="status" aria-live="polite" hidden></div>
 
@@ -88,7 +93,7 @@
             <legend>Transcription mode <span class="muted">(handwriting flow)</span></legend>
             <label class="radio"><input type="radio" name="mode" value="two_pass" /> <b>Two-pass</b> &mdash; best accuracy (transcribe, then locate). ~2&times; API cost.</label>
             <label class="radio"><input type="radio" name="mode" value="one_pass" /> <b>One-pass</b> &mdash; faster &amp; cheaper (text + boxes in one call).</label>
-            <label class="radio"><input type="checkbox" id="refine_word_boxes" /> <b>Refine word positions with Tesseract</b> &mdash; keeps Gemini's transcription as the text; uses Tesseract only to place words more precisely where they agree. Needs Tesseract; improves word location, never the wording.</label>
+            <label class="radio"><input type="checkbox" id="refine_word_boxes" /> <b>Refine word positions with Tesseract</b> &mdash; keeps the AI service's transcription as the text; uses Tesseract only to place words more precisely where they agree. Needs Tesseract; improves word location, never the wording.</label>
           </fieldset>
 
           <label class="field">
@@ -293,11 +298,11 @@
       <dt>Bounding box</dt>
       <dd>The rectangle marking where a line or word sits on the page.</dd>
       <dt>API key</dt>
-      <dd>A private code that lets this app use Google's Gemini service on your behalf.</dd>
+      <dd>A private code that lets this app use an AI service (Gemini, Claude or OpenAI) on your behalf.</dd>
       <dt>DPI</dt>
       <dd>Dots per inch &mdash; how finely a PDF page is turned into an image. Higher is sharper but larger.</dd>
       <dt>Token</dt>
-      <dd>The unit Google counts, and bills, for the text and images it reads and writes.</dd>
+      <dd>The unit an AI service counts, and bills, for the text and images it reads and writes.</dd>
     </dl>
   </details>
 
@@ -313,6 +318,6 @@
     <a href="https://github.com/oconnorv/CursBreaker" target="_blank" rel="noopener noreferrer">GitHub</a>.
   </footer>
 
-  <script src="/static/app.js?v=35"></script>
+  <script src="/static/app.js?v=38"></script>
 </body>
 </html>
