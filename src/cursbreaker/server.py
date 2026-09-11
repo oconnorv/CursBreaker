@@ -723,11 +723,11 @@ def _run_job(job_id, paths, settings, out_dir, outputs=None, *, skip_text_overla
                     for n in r.image_names
                 ],
                 "error": r.error,
-                "tokens": _usage_to_dict(r.token_usage, job["model"]),
+                "tokens": _usage_to_dict(r.token_usage, _priced_model(job)),
             }
             for r in results
         ]
-        job["tokens"] = _usage_to_dict(provider.usage, job["model"])
+        job["tokens"] = _usage_to_dict(provider.usage, _priced_model(job))
         # Completed files (if any) are kept and downloadable in every stop case.
         # "stopped" (user ended at a disk-full pause) is distinct from a manual
         # "cancelled" so the UI can explain what happened.
@@ -777,6 +777,27 @@ def _usage_to_dict(usage, model=None) -> dict:
     return d
 
 
+def _priced_model(job: dict) -> str | None:
+    """Which model the cost figure should be priced at.
+
+    Normally the one the job was started with. But a Gemini job can fall back
+    to another model mid-run when the configured one turns out to be retired,
+    and the catalog's models are ~3x apart in price, so pricing a fallback run
+    at the configured model's rate would report a confidently wrong number.
+
+    When exactly one model actually ran, price that. When a run spanned more
+    than one, the usage counters are a single pooled total that can't be split
+    between them, so there is no correct dollar figure -- return ``None`` and
+    let the UI fall back to reporting tokens only, which is at least true."""
+    provider = job.get("_provider")
+    used = list(getattr(provider, "models_used", []) or [])
+    if len(used) == 1:
+        return used[0]
+    if len(used) > 1:
+        return None
+    return job.get("model")
+
+
 def _public_job(job: dict) -> dict:
     """A copy of a job's state safe to send to the browser: private keys (the
     provider handle) dropped, and the token counter refreshed live from the
@@ -790,7 +811,7 @@ def _public_job(job: dict) -> dict:
     provider = job.get("_provider")
     usage = getattr(provider, "usage", None) if provider is not None else None
     if usage is not None:
-        out["tokens"] = _usage_to_dict(usage, job.get("model"))
+        out["tokens"] = _usage_to_dict(usage, _priced_model(job))
     return out
 
 

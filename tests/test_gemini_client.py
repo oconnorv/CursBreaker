@@ -145,12 +145,12 @@ def test_generate_does_not_mask_real_errors_with_fallback():
     def behavior(model):
         raise _Err(400, "INVALID_ARGUMENT: bad image")
 
-    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov, _ = _provider("gemini-3.8-flash", behavior)
     with pytest.raises(Exception) as ei:
         prov.transcribe_text(b"img")
     assert "invalid_argument" in str(ei.value).lower()
     # Only the configured model is tried (full + minimal retry) -- never a fallback.
-    assert set(prov.client.models.calls) == {"gemini-2.5-pro"}
+    assert set(prov.client.models.calls) == {"gemini-3.8-flash"}
 
 
 # --- transient-failure retries (e.g. 503 deadline on big/dense images) ----- #
@@ -177,7 +177,7 @@ def test_call_retries_transient_then_succeeds(monkeypatch):
             raise _Err(503, "UNAVAILABLE. Deadline expired before operation could complete.")
         return SimpleNamespace(text="ok", parsed=None)
 
-    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov, _ = _provider("gemini-3.8-flash", behavior)
     assert prov.transcribe_text(b"img") == "ok"   # succeeds despite two 503s
     assert calls["n"] == 3                          # two retries, then success
 
@@ -188,7 +188,7 @@ def test_transient_exhausted_gives_actionable_error(monkeypatch):
     def behavior(model):
         raise _Err(503, "UNAVAILABLE. Deadline expired before operation could complete.")
 
-    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov, _ = _provider("gemini-3.8-flash", behavior)
     with pytest.raises(RuntimeError) as ei:
         prov.transcribe_text(b"img")
     msg = str(ei.value).lower()
@@ -213,7 +213,7 @@ def test_call_accumulates_token_usage():
             ),
         )
 
-    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov, _ = _provider("gemini-3.8-flash", behavior)
     assert prov.usage.calls == 0  # nothing billed before the first call
     prov.transcribe_text(b"img")
     assert prov.usage.input == 300
@@ -243,7 +243,7 @@ def test_failed_retried_attempts_are_not_billed(monkeypatch):
             usage_metadata={"prompt_token_count": 100, "candidates_token_count": 5},
         )
 
-    prov, _ = _provider("gemini-2.5-pro", behavior)
+    prov, _ = _provider("gemini-3.8-flash", behavior)
     prov.transcribe_text(b"img")
     assert prov.usage.calls == 1          # one billed call despite two retries
     assert prov.usage.input == 100
@@ -252,7 +252,7 @@ def test_failed_retried_attempts_are_not_billed(monkeypatch):
 def test_count_input_tokens_uses_count_tokens_endpoint():
     from types import SimpleNamespace
 
-    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-2.5-pro"))
+    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-3.8-flash"))
     seen = {}
 
     class _Models:
@@ -263,7 +263,7 @@ def test_count_input_tokens_uses_count_tokens_endpoint():
 
     prov.client = SimpleNamespace(models=_Models())
     assert prov.count_input_tokens(b"imgbytes") == 1234
-    assert seen["model"] == "gemini-2.5-pro"
+    assert seen["model"] == "gemini-3.8-flash"
     # The transcription prompt + the image are what get measured.
     assert any("paleographer" in str(c).lower() for c in seen["contents"])
 
@@ -271,7 +271,7 @@ def test_count_input_tokens_uses_count_tokens_endpoint():
 def test_count_input_tokens_returns_zero_on_failure():
     from types import SimpleNamespace
 
-    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-2.5-pro"))
+    prov = GeminiProvider(Settings(api_key="dummy", transcription_model="gemini-3.8-flash"))
 
     class _Models:
         def count_tokens(self, model, contents):
@@ -288,3 +288,33 @@ def test_mock_provider_tracks_zero_usage():
     assert prov.usage.total == 0
     assert prov.usage.calls == 0
     assert prov.count_input_tokens(b"img") == 0
+
+
+def test_fallbacks_and_suggestions_come_from_the_priced_catalog():
+    # A hardcoded list goes stale silently: the Gemini 2.5 line sat here as the
+    # fallback long after it was deprecated, so a retirement would have fallen
+    # back onto models that must not be used and that the app can't price.
+    from cursbreaker.pricing import catalog_for
+
+    catalogued = [m.model for m in catalog_for("gemini")]
+    assert gemini_client.FALLBACK_MODELS == catalogued
+    assert gemini_client.SUGGESTED_MODELS == catalogued
+
+
+def test_no_deprecated_gemini_models_are_offered_anywhere():
+    from cursbreaker.pricing import CATALOG
+
+    everywhere = (
+        gemini_client.FALLBACK_MODELS
+        + gemini_client.SUGGESTED_MODELS
+        + [m.model for m in CATALOG]
+    )
+    assert not [m for m in everywhere if m.startswith("gemini-2.")]
+
+
+def test_every_fallback_can_be_priced():
+    # A fallback the catalog doesn't price would run the job at a cost the app
+    # cannot report.
+    from cursbreaker.pricing import pricing_for
+
+    assert all(pricing_for(m) is not None for m in gemini_client.FALLBACK_MODELS)

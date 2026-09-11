@@ -247,7 +247,9 @@ search-result highlighting), and **ALTO XML** for ALTO/METS-based repositories.
   they're approximate within a line but reliable for search/highlight.
 - **Model names change.** If a default model is unavailable to your key, pick a
   current one from the dropdown. (On OpenAI, a rejected model id comes back
-  with the list of models your key can actually see.)
+  with the list of models your key can actually see. On Gemini, a retired
+  model falls back to another catalogued one so a long batch survives — and
+  the cost is then reported at the price of the model that actually ran.)
 - **Known failure modes** (from the underlying model): marginalia and text
   squeezed between lines transcribe poorly; very dense or multi-column pages may
   drop or merge lines.

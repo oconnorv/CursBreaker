@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cursbreaker import server
+from cursbreaker.models import TokenUsage
 from cursbreaker.server import app
 
 client = TestClient(app)
@@ -1020,6 +1022,53 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
 def test_estimate_no_staged_files_is_400():
     r = client.post("/api/estimate", json={"file_ids": ["nope"]})
     assert r.status_code == 400
+
+
+def test_cost_is_priced_at_the_model_that_actually_ran():
+    # A Gemini job can fall back when the configured model turns out to be
+    # retired, and Pro/Flash are ~3x apart, so pricing the run at the
+    # configured model would report a confidently wrong number.
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = ["gemini-3.8-flash"]
+
+    job = {"model": "gemini-3.1-pro-preview", "_provider": _P()}
+    assert _priced_model(job) == "gemini-3.8-flash"
+
+    body = server._usage_to_dict(
+        TokenUsage(input=1_000_000, output=1_000_000, calls=1), _priced_model(job)
+    )
+    assert body["price_input_per_mtok"] == 0.75     # Flash's rate, not Pro's
+    assert body["cost"] == pytest.approx(0.75 + 3.75)
+
+
+def test_a_run_spanning_two_models_reports_tokens_without_a_dollar_figure():
+    # The usage counters are one pooled total and can't be split between the
+    # models, so there is no correct dollar figure -- tokens only is at least
+    # true.
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = ["gemini-3.1-pro-preview", "gemini-3.8-flash"]
+
+    job = {"model": "gemini-3.1-pro-preview", "_provider": _P()}
+    assert _priced_model(job) is None
+    body = server._usage_to_dict(TokenUsage(input=10, output=10, calls=1), None)
+    assert body["cost"] is None
+    assert body["total"] == 20
+
+
+def test_cost_falls_back_to_the_configured_model_before_anything_runs():
+    from cursbreaker.server import _priced_model
+
+    class _P:
+        models_used = []
+
+    assert _priced_model({"model": "gemini-3.8-flash", "_provider": _P()}) == (
+        "gemini-3.8-flash"
+    )
+    assert _priced_model({"model": "gemini-3.8-flash"}) == "gemini-3.8-flash"
 
 
 def test_models_endpoint_returns_priced_catalog():

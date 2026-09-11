@@ -36,21 +36,29 @@ from .providers import (
     strip_code_fence as _strip_code_fence,
 )
 
-# Shown as hints only when the live model list is unavailable; the UI prefers
-# the live list from the user's key. We keep these to currently-callable models:
-# retired "preview" names (e.g. gemini-3-pro-preview) still show up in the API's
-# ListModels output but 404 on use, so suggesting them would mislead.
-SUGGESTED_MODELS = [
-    "gemini-3.1-pro-preview",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-]
+def _catalogued_models() -> list[str]:
+    """The Gemini models this app offers, newest/most capable first.
 
-# Stable, broadly-available models to fall back to when the configured model has
-# been retired (preview models get removed without notice). Ordered best-first;
-# flash is included because it's reachable on more keys (incl. free tier).
-FALLBACK_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
+    Both the suggestion list and the retirement fallbacks read from the priced
+    catalog rather than keeping their own copy. That is deliberate: a
+    hardcoded list goes stale silently, and a fallback onto a model that isn't
+    in the catalog would run the job at a price the app can't report -- or, if
+    the id had since been deprecated, wouldn't run it at all."""
+    from .pricing import catalog_for
+
+    return [m.model for m in catalog_for("gemini")]
+
+
+# Shown as hints only when the live model list is unavailable; the UI prefers
+# the live list from the user's key. Kept to currently-callable models:
+# retired names (e.g. the Gemini 2.5 line) still show up in the API's
+# ListModels output but must not be used, so suggesting them would mislead.
+SUGGESTED_MODELS = _catalogued_models()
+
+# Models to fall back to when the configured one has been retired (preview
+# models get removed without notice). Ordered best-first, and drawn from the
+# catalog so a fallback is always a model the app both supports and can price.
+FALLBACK_MODELS = _catalogued_models()
 
 
 
@@ -169,6 +177,10 @@ class GeminiProvider:
         # Models that returned "not found" this session; skip re-trying them and
         # go straight to a fallback so we don't repeat the failed call per page.
         self._dead_models: set[str] = set()
+        # Models that actually produced billed output, in first-use order. A
+        # fallback changes what the run costs (Pro and Flash are ~3x apart), so
+        # the cost report prices what ran, not what was configured.
+        self.models_used: list[str] = []
         # Running token total across every billed call (input/output/thinking/
         # calls). Read live by the server for the in-progress token counter.
         self.usage = TokenUsage()
@@ -314,6 +326,8 @@ class GeminiProvider:
                 # attempts before a retry are not counted -- they produced no
                 # output -- so this reflects tokens we were charged for.
                 self.usage.add_response(getattr(resp, "usage_metadata", None))
+                if model not in self.models_used:
+                    self.models_used.append(model)
                 return resp
             except Exception as exc:
                 if attempt >= _MAX_RETRIES or not _is_transient(exc):
