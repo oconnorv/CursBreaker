@@ -31,6 +31,7 @@ from .images import (
 )
 from .models import OcrWord, PageResult, PixelBox, PlacedLine, TokenUsage, TranscribedLine
 from .pricing import PRICES_AS_OF, cost_for, effective_rates, pricing_for
+from .providers import provider_info
 from .searchable_pdf import (
     write_searchable_pdf_from_images,
     write_searchable_pdf_over_source,
@@ -614,9 +615,14 @@ def estimate_usage(
     the page count -- fast, and exact enough that the user can sanity-check the
     bill. *Output* tokens can't be known until the text is generated, so they use
     a single, surfaced per-call assumption. Two-pass sends the image twice, so it
-    counts two calls per page; Printed-only runs make no Gemini call and estimate
+    counts two calls per page; Printed-only runs make no API call and estimates
     to zero. The returned dict is clearly labelled as an estimate by the UI,
-    which also shows the per-million prices used."""
+    which also shows the per-million prices used.
+
+    Not every provider can do the input half: OpenAI exposes no free
+    token-counting endpoint, so ``input_measured`` comes back False and the
+    input figure is 0 rather than a number nobody measured. The UI says so
+    instead of presenting a suspiciously cheap total."""
     content = (settings.content_type or "handwriting").lower()
     if content == "text":
         calls_per_page = 0
@@ -675,6 +681,7 @@ def estimate_usage(
     # Price automatically from the selected model's published rate (no manual
     # entry). No catalog entry, or no calls -> tokens only, no dollar figure.
     pricing = pricing_for(settings.transcription_model)
+    info = provider_info(settings.provider)
 
     def _cost(output):
         if not (pricing and calls):
@@ -693,6 +700,11 @@ def estimate_usage(
         in_rate = out_rate = 0.0
     return {
         "files": len(paths),
+        "provider": info.id,
+        "provider_label": info.label,
+        # False when the provider can't count image tokens for free, so the UI
+        # can say the input side is unmeasured rather than imply it's free.
+        "input_measured": info.counts_input_tokens,
         "pages": total_pages,
         "calls": calls,
         "calls_per_page": calls_per_page,

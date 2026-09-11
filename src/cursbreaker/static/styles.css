@@ -182,6 +182,11 @@ main {
   .topbar { padding: 14px 16px; }
 }
 
+/* Service picker: one row per provider, same rhythm as the other radio groups
+   but with room for each service's one-line caveat to wrap under its name. */
+.provider-choices { display: flex; flex-direction: column; gap: 2px; }
+.provider-choice { margin: 4px 0; line-height: 1.45; }
+
 .field { display: block; margin: 10px 0; }
 .field > span, .field > label, legend { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 fieldset.field { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }

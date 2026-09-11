@@ -1,20 +1,63 @@
 from cursbreaker.models import TokenUsage
 from cursbreaker.pricing import (
     CATALOG,
+    catalog_for,
     cost_for,
+    default_model_for,
     effective_rates,
+    owns_model,
     pricing_for,
 )
 
 
-def test_catalog_has_the_three_curated_models_pro_first():
+def test_gemini_catalog_lists_the_three_curated_models_pro_first():
     # Pro is first in the dropdown (and the saved default); lighter models follow.
-    ids = [m.model for m in CATALOG]
-    assert ids == [
+    assert [m.model for m in catalog_for("gemini")] == [
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
     ]
+
+
+def test_anthropic_catalog_is_priced_and_opus_first():
+    entries = catalog_for("anthropic")
+    assert [m.model for m in entries] == [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+    ]
+    # Every catalogued model must carry a real price, or the estimate it backs
+    # would quietly read $0.00 rather than "no published price".
+    assert all(m.input_per_mtok > 0 and m.output_per_mtok > 0 for m in entries)
+
+
+def test_openai_has_no_curated_prices_so_models_are_listed_live():
+    # Deliberate: no verified OpenAI price list, so nothing is invented here.
+    # The UI path for an unpriced model (tokens, no dollar figure) covers it.
+    assert catalog_for("openai") == []
+    assert default_model_for("openai") == ""
+
+
+def test_every_catalog_entry_belongs_to_a_known_provider():
+    from cursbreaker.providers import PROVIDERS
+
+    assert {m.provider for m in CATALOG} <= set(PROVIDERS)
+
+
+def test_default_model_is_the_first_entry_for_priced_providers():
+    assert default_model_for("gemini") == "gemini-3.1-pro-preview"
+    assert default_model_for("anthropic") == "claude-opus-5"
+
+
+def test_owns_model_keeps_providers_from_inheriting_each_others_models():
+    assert owns_model("gemini", "gemini-3.5-flash")
+    assert not owns_model("anthropic", "gemini-3.5-flash")
+    assert owns_model("anthropic", "claude-opus-5")
+    assert not owns_model("gemini", "claude-opus-5")
+    # A model we don't price is acceptable only where models are listed live.
+    assert owns_model("openai", "some-new-openai-model")
+    assert not owns_model("gemini", "some-new-openai-model")
+    assert not owns_model("openai", "")
 
 
 def test_pricing_for_unknown_model_is_none():

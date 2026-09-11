@@ -20,6 +20,8 @@ dependencies = [
     "lxml>=5.0",
     "pydantic>=2.6",
     "google-genai>=1.0",
+    "anthropic>=1.0",
+    "openai>=2.0",
     "platformdirs>=4.0",
     "pytesseract>=0.3.10",
 ]

@@ -32,7 +32,7 @@ from starlette.background import BackgroundTask
 
 from . import __version__
 from .config import load_settings, save_settings
-from .gemini_client import make_provider
+from .providers import PROVIDERS, make_provider, provider_info
 from .hocr import XHTML_NS
 from .images import SUPPORTED_EXT, count_content_pages, is_supported, pdf_has_text_layer
 from .pipeline import OUTPUT_FORMATS, estimate_usage, process_batch
@@ -40,6 +40,7 @@ from .pricing import (
     CATALOG,
     PRICES_AS_OF,
     PRICING_URL,
+    catalog_for,
     cost_for,
     effective_rates,
     pricing_for,
@@ -118,10 +119,11 @@ def get_settings():
 async def update_settings(payload: dict):
     settings = load_settings()
     fields = type(settings).model_fields
+    key_fields = {info.key_field for info in PROVIDERS.values()}
     for key, value in payload.items():
-        if key == "api_key":
+        if key in key_fields:
             if value:  # never blank out a saved key on a no-op save
-                settings.api_key = value
+                setattr(settings, key, value)
         elif key in fields:
             setattr(settings, key, value)
     settings.normalize_content()  # migrate a posted legacy "mixed" value
@@ -131,9 +133,15 @@ async def update_settings(payload: dict):
 
 
 @app.delete("/api/settings/api_key")
-def clear_api_key():
+def clear_api_key(provider: str | None = None):
+    """Forget one provider's stored key. Defaults to the active provider, so
+    the Settings panel's Clear button needs no argument; an explicit
+    ``?provider=`` lets a user drop a key for a service they've switched away
+    from. An env-var key is not ours to clear -- ``public_dict`` keeps
+    reporting it, with source 'env'."""
     settings = load_settings()
-    settings.api_key = ""
+    info = provider_info(provider or settings.provider)
+    setattr(settings, info.key_field, "")
     save_settings(settings)
     return settings.public_dict()
 
@@ -161,35 +169,98 @@ def tesseract_status():
 
 @app.get("/api/key-status")
 def key_status():
-    """Cheap, generation-free check that the stored Gemini key still works, so a
-    revoked/expired key surfaces in Settings before a transcription fails. Uses
-    the free ListModels endpoint (no token/quota cost)."""
-    from .gemini_client import check_api_key
+    """Cheap, generation-free check that the active provider's stored key still
+    works, so a revoked/expired key surfaces in Settings before a transcription
+    fails. Every provider's probe uses its free list-models endpoint, so this
+    costs no tokens or quota."""
+    from .providers import check_api_key
 
     st = check_api_key(load_settings())
-    return {"state": st.state, "message": st.message}
+    return {"state": st.state, "message": st.message, "provider": st.provider}
+
+
+@app.get("/api/providers")
+def list_providers():
+    """The services a user can choose between, with everything the Settings
+    panel needs to render one: where to get a key, which environment variables
+    override it, and the caveats that differ by provider (whether a cost
+    estimate is possible at all, and whether models come from our price list or
+    from the user's own key)."""
+    return {
+        "providers": [
+            {
+                "id": info.id,
+                "label": info.label,
+                "short_label": info.short_label,
+                # Which Settings field POST /api/settings writes this key to,
+                # so the browser never has to hardcode the mapping.
+                "key_field": info.key_field,
+                "console_url": info.console_url,
+                "pricing_url": info.pricing_url,
+                "env_vars": list(info.env_vars),
+                "counts_input_tokens": info.counts_input_tokens,
+                "lists_models_live": info.lists_models_live,
+                "notes": info.notes,
+            }
+            for info in PROVIDERS.values()
+        ],
+        "default": load_settings().provider,
+    }
 
 
 @app.get("/api/models")
-def list_models():
-    """The curated model catalog with published prices, for the dropdown +
-    automatic cost estimate. A fixed list (not the key's live ListModels) so the
-    selectable models and their prices stay in lockstep."""
-    return {
-        "models": [
+def list_models(provider: str | None = None):
+    """Selectable models for one provider (default: the active one).
+
+    Priced providers return their curated catalog -- a fixed list, not the
+    key's live models, so the selectable models and their prices stay in
+    lockstep. A provider with no price list (see ``pricing``) instead returns
+    what the user's own key can see, priced as unknown; the UI already renders
+    "no published price" without a dollar figure."""
+    settings = load_settings()
+    info = provider_info(provider or settings.provider)
+    models = [
+        {
+            "id": m.model,
+            "label": m.label,
+            "provider": m.provider,
+            "input_per_mtok": m.input_per_mtok,
+            "output_per_mtok": m.output_per_mtok,
+            "tier_threshold": m.tier_threshold,
+            "input_per_mtok_high": m.input_per_mtok_high,
+            "output_per_mtok_high": m.output_per_mtok_high,
+            "priced": True,
+        }
+        for m in catalog_for(info.id)
+    ]
+    live_error = ""
+    if info.lists_models_live:
+        try:
+            settings.provider = info.id
+            live = make_provider(settings).list_models()
+        except Exception as exc:  # noqa: BLE001 -- a missing key is normal here
+            live, live_error = [], str(exc)
+        models = [
             {
-                "id": m.model,
-                "label": m.label,
-                "input_per_mtok": m.input_per_mtok,
-                "output_per_mtok": m.output_per_mtok,
-                "tier_threshold": m.tier_threshold,
-                "input_per_mtok_high": m.input_per_mtok_high,
-                "output_per_mtok_high": m.output_per_mtok_high,
+                "id": mid,
+                "label": mid,
+                "provider": info.id,
+                "input_per_mtok": 0.0,
+                "output_per_mtok": 0.0,
+                "tier_threshold": 0,
+                "input_per_mtok_high": 0.0,
+                "output_per_mtok_high": 0.0,
+                "priced": False,
             }
-            for m in CATALOG
-        ],
+            for mid in live
+        ]
+    return {
+        "provider": info.id,
+        "models": models,
+        "live": info.lists_models_live,
+        "live_error": live_error,
         "prices_as_of": PRICES_AS_OF,
-        "pricing_url": PRICING_URL,
+        "pricing_url": info.pricing_url,
     }
 
 
@@ -518,7 +589,9 @@ def estimate(req: EstimateRequest):
 
     if not settings.resolved_api_key():
         raise HTTPException(
-            400, "No Gemini API key set. Add one in Settings to estimate cost."
+            400,
+            f"No {provider_info(settings.provider).label} API key set. Add one "
+            "in Settings to estimate cost.",
         )
 
     try:
@@ -540,7 +613,11 @@ def process(req: ProcessRequest):
     if req.mode in ("one_pass", "two_pass"):
         settings.mode = req.mode
     if not settings.resolved_api_key():
-        raise HTTPException(400, "No Gemini API key set. Add one in Settings.")
+        raise HTTPException(
+            400,
+            f"No {provider_info(settings.provider).label} API key set. Add one "
+            "in Settings.",
+        )
 
     # Keep only recognized output kinds; empty (nothing picked, or all unknown)
     # falls through to "create everything" in the pipeline.

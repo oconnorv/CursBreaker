@@ -3,7 +3,8 @@
 **Turn handwriting into searchable text — and know where every word sits on the page.**
 
 CursBreaker is a small, local desktop application (it runs in your browser) that
-sends document images to **Google Gemini** for high-accuracy handwriting
+sends document images to the AI service of your choice — **Google Gemini**,
+**Anthropic Claude** or **OpenAI** — for high-accuracy handwriting
 transcription, then produces, for each page:
 
 1. a plain-text transcription (`.txt`);
@@ -13,8 +14,11 @@ transcription, then produces, for each page:
 3. an **ALTO XML** file (`.alto.xml`) — the same word geometry in the Library of
    Congress's preservation format, for ALTO/METS-based repositories.
 
-You bring your **own** Gemini API key; CursBreaker never ships or phones home
-with anyone else's.
+You bring your **own** API key for whichever service you use; CursBreaker never
+ships or phones home with anyone else's. Pick the service your institution has
+approved — the pipeline, the settings and the output files are identical either
+way, and each service keeps its own saved key, so switching back and forth
+never means pasting a key again.
 
 ---
 
@@ -22,15 +26,18 @@ with anyone else's.
 
 Recent work (notably Mark Humphries' [*Gemini 3 Solves Handwriting
 Recognition*](https://generativehistory.substack.com/p/gemini-3-solves-handwriting-recognition))
-showed that Gemini can transcribe historical cursive at near-human accuracy.
-But a transcript alone can't tell you *where* a word is on the page. CursBreaker
-adds that missing half: it asks Gemini for **line bounding boxes** alongside the
-text and converts everything into standards-compliant hOCR and ALTO XML.
+showed that a frontier model can transcribe historical cursive at near-human
+accuracy. But a transcript alone can't tell you *where* a word is on the page.
+CursBreaker adds that missing half: it asks the model for **line bounding
+boxes** alongside the text and converts everything into standards-compliant
+hOCR and ALTO XML.
 
 ### How localization works
 
-Gemini returns spatial coordinates as `box_2d = [ymin, xmin, ymax, xmax]`,
-normalized to a 0–1000 grid (origin top-left). CursBreaker:
+Every provider is asked for the same thing, in the same words (the prompts live
+in one place, `src/cursbreaker/prompts.py`): spatial coordinates as
+`box_2d = [ymin, xmin, ymax, xmax]`, normalized to a 0–1000 grid (origin
+top-left). CursBreaker:
 
 1. converts those to real pixels using the page dimensions;
 2. emits one hOCR `ocr_line` per detected line; and
@@ -38,6 +45,13 @@ normalized to a 0–1000 grid (origin top-left). CursBreaker:
    proportion to word length — so individual words stay searchable, without
    relying on per-character detection (which is unreliable for connected
    cursive).
+
+How precisely a model places those boxes varies between services, and it's the
+half most worth checking on your own material before committing to a large
+batch. Gemini's spatial grounding is what the original recipe was built around;
+if line boxes from another service land loosely, turn on **Refine word
+positions with Tesseract**, which keeps the model's transcription as the text
+and uses local OCR only to place the words.
 
 ---
 
@@ -103,52 +117,75 @@ $env:TESSERACT_CMD = "C:\Program Files\Tesseract-OCR\tesseract.exe"
 CursBreaker also auto-checks the well-known install locations on each OS, so in
 most cases no override is needed.
 
-## Get a Gemini API key
+## Get an API key
 
-**New to this? Don't worry.** CursBreaker uses Google's Gemini AI to read
-handwriting, and Google needs to know the requests are coming from you. An
-**API key** is how you do that: think of it as a long password that lets
-CursBreaker use Gemini on your behalf. You create it once, paste it into
+**New to this? Don't worry.** CursBreaker uses a hosted AI service to read
+handwriting, and that service needs to know the requests are coming from you.
+An **API key** is how you do that: think of it as a long password that lets
+CursBreaker use the service on your behalf. You create it once, paste it into
 CursBreaker, and you're set. You bring your **own** key — CursBreaker never
 ships or borrows anyone else's.
 
-You'll need a Google account (the same kind you use for Gmail). Then:
+Pick whichever service you (or your institution) prefer in **Settings → AI
+service**, then create a key for it:
 
-1. Go to **Google AI Studio**: <https://aistudio.google.com/apikey>
-2. **Sign in** with your Google account if you're prompted.
-3. Click **Create API key**. (If you don't see that button, click **Get API
-   key** in the left-hand menu first.) If Google asks which project to use, let
-   it **create a new one** for you — the name doesn't matter.
-4. Google shows you the key — a long string of letters and numbers that starts
-   with `AIza…`. Click to **copy** it.
-5. Back in CursBreaker, open **Settings**, paste the key into the **Gemini API
-   key** box, and click **Save key**. That's it.
+| Service | Where to create a key | Environment variable |
+| --- | --- | --- |
+| Google Gemini | <https://aistudio.google.com/apikey> | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+| Anthropic Claude | <https://console.anthropic.com/settings/keys> | `ANTHROPIC_API_KEY` |
+| OpenAI | <https://platform.openai.com/api-keys> | `OPENAI_API_KEY` |
 
-Your key is stored locally on your own computer (with owner-only file
-permissions) and is sent only to Google's Gemini API when you transcribe —
-never to us or anyone else. You can remove it at any time with the **Clear**
-button. (Prefer not to paste it into the app? Set the `GEMINI_API_KEY`
-environment variable before launching instead.)
+Sign in, create a key, copy it, then open **Settings** in CursBreaker, paste it
+into the **API key** box and click **Save key**. The in-app help under that box
+walks through the same steps for whichever service you've selected.
+
+Keys are stored locally on your own computer (with owner-only file permissions)
+and are sent only to the service you chose, when you transcribe — never to us
+or anyone else. Each service has its own slot, so a saved Gemini key survives
+switching to Claude and back. Remove one at any time with the **Clear** button,
+which clears only the service you're currently on. Prefer not to paste a key
+into the app at all? Set the environment variable from the table above before
+launching; it overrides anything saved in the app.
 
 ### Does it cost money?
 
-Google offers a **free tier** you can start with — **no credit card required** —
-so you can try CursBreaker without paying anything; the free tier just has daily
-limits. For larger jobs you can turn on paid usage (billing) in your Google
-account, and Google then charges based on how much text the model reads and
-writes. CursBreaker helps you stay in control: it shows an **estimated cost
-before every run** and the **actual usage afterward**, and the model dropdown
-lists each model's published price. See Google's current rates at
-<https://ai.google.dev/gemini-api/docs/pricing> — those come straight from
-Google and can change, so the in-app figures are estimates, not a guarantee.
+Yes — you pay the service directly for what you use, and CursBreaker adds
+nothing on top. Google offers a **free tier** you can start with (no credit
+card required, with daily limits); Anthropic and OpenAI are paid from the
+start, though new accounts often come with trial credit.
+
+CursBreaker helps you stay in control: it shows an **estimated cost before
+every run** and the **actual token usage afterward**, and the model dropdown
+lists each model's published price.
+
+Two honest caveats about that estimate:
+
+* **OpenAI runs report tokens, not dollars.** CursBreaker prices a run from a
+  curated list of published per-million-token rates, and it ships that list for
+  Gemini and Claude only. OpenAI models are read live from your own key and
+  carry no price, so the estimate and the post-run summary show token counts
+  with no dollar figure. (Adding rates to `src/cursbreaker/pricing.py` is all
+  it takes to change that.)
+* **OpenAI can't price the page images in advance.** Gemini and Claude both
+  expose a free token-counting endpoint, so the estimate measures the real
+  input cost of your pages before anything runs. OpenAI has no equivalent, so
+  its estimate covers the output side only and says so — the input half,
+  usually the larger one, is missing rather than zero.
+
+Published rates change, so every in-app figure is an estimate, not a guarantee.
+Current rates: [Gemini](https://ai.google.dev/gemini-api/docs/pricing) ·
+[Claude](https://claude.com/pricing#api) ·
+[OpenAI](https://openai.com/api/pricing/).
 
 > **Keep your key private.** Treat it like a password: anyone who has it can run
 > up usage on your account. Don't paste it into emails, chats, or screenshots.
-> If a key is ever exposed, delete it in Google AI Studio and create a new one.
+> If a key is ever exposed, delete it in that service's console and create a
+> new one.
 
 ## Using it
 
-1. **Settings** — paste your API key, pick a model, and choose a mode.
+1. **Settings** — choose your AI service, paste that service's API key, pick a
+   model, and choose a mode.
 2. **Documents** — drag in (or browse for) TIFF / JPEG / PNG / GIF / PDF files.
    Bulk import and multi-page PDFs are supported.
 3. **Transcribe** — watch progress, then download a per-file searchable `.pdf`,
@@ -161,8 +198,8 @@ Google and can change, so the in-app figures are estimates, not a guarantee.
 
 | Content type | What it does | When to use |
 |---|---|---|
-| **Handwriting** (default) | Gemini transcribes the whole page — printed text included — and its transcription is always the authoritative text. Optionally, **Tesseract refines word *positions*** where its reading agrees with Gemini's (real per-word boxes), without ever changing the wording. | Any page with handwriting, including mixed printed + handwritten (typeset letterhead + handwritten body, printed headers + handwritten entries). |
-| **Printed only** | Tesseract OCRs the whole page locally. **No Gemini call** (no API cost). | Fully typeset documents. |
+| **Handwriting** (default) | The AI service transcribes the whole page — printed text included — and its transcription is always the authoritative text. Optionally, **Tesseract refines word *positions*** where its reading agrees with the model's (real per-word boxes), without ever changing the wording. | Any page with handwriting, including mixed printed + handwritten (typeset letterhead + handwritten body, printed headers + handwritten entries). |
+| **Printed only** | Tesseract OCRs the whole page locally. **No API call** (no cost). | Fully typeset documents. |
 
 ### Two modes for handwriting (Two-pass / One-pass)
 
@@ -173,14 +210,20 @@ Google and can change, so the in-app figures are estimates, not a guarantee.
 
 ### Accuracy settings (defaults)
 
-- **Model:** `gemini-3.1-pro-preview` by default — pick from a short curated
-  dropdown (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite); the app shows each
-  model's published price and uses it to estimate cost automatically.
+- **Model:** each service starts on its most accurate option —
+  `gemini-3.1-pro-preview` for Gemini, `claude-opus-5` for Claude — picked from
+  a short curated dropdown (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite;
+  Claude Opus 5 · Sonnet 5 · Haiku 4.5), with each model's published price
+  shown and used to estimate cost automatically. OpenAI has no curated list:
+  its dropdown is filled from your own key and carries no prices (see *Does it
+  cost money?* above).
 - **Temperature:** `0.3`
 - **Thinking budget:** `128` tokens — Humphries' finding is that extra
   reasoning *hurts* handwriting accuracy, so the default is deliberately
   minimal. The Advanced panel also exposes a coarser "thinking level"
-  (`low` / `medium` / `high`); when that's set it overrides the budget.
+  (`low` / `medium` / `high`); when that's set it overrides the budget. Claude
+  takes no token budget, so the same setting maps onto its reasoning *effort*
+  and defaults to `low` for the same reason.
 - **Media resolution:** `high`
 - **Preprocessing:** gentle orientation/denoise/brightness (toggleable).
 
@@ -211,8 +254,14 @@ search-result highlighting), and **ALTO XML** for ALTO/METS-based repositories.
   drop or merge lines.
 - **Duplicate filenames** within a single batch will overwrite each other — give
   files unique names.
-- **Privacy:** your images and key are sent to Google's Gemini API when you
-  transcribe. Nothing is sent anywhere else.
+- **Privacy:** your images and key are sent to whichever AI service you select,
+  when you transcribe. Nothing is sent anywhere else, and switching service
+  changes who receives them — worth checking against your institution's policy
+  before a run.
+- **Box quality varies by service.** Gemini's spatial grounding is what this
+  workflow was built around; other services transcribe well but may place line
+  boxes less precisely. Check a sample page's box preview before a large batch,
+  and consider **Refine word positions with Tesseract**.
 
 ## Downloads / packaging
 

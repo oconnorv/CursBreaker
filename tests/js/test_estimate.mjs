@@ -68,7 +68,7 @@ check("shows the per-page output range", h.includes("3,000") && h.includes("9,00
 check("links to live pricing", h.includes("ai.google.dev/gemini-api/docs/pricing"), h);
 
 const nb = renderEstimate({ billable: false, files: 3, reason: "Printed-only mode" });
-check("not-billable explains no token cost", /no Gemini tokens/i.test(nb) && /Printed-only/.test(nb), nb);
+check("not-billable explains no token cost", /no tokens/i.test(nb) && /Printed-only/.test(nb), nb);
 check("not-billable makes no 'exact' claim", !/are exact/i.test(nb), nb);
 
 console.log("\n" + (failures === 0 ? "ALL PASS" : failures + " FAILURE(S)"));

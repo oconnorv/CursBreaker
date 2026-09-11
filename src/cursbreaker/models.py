@@ -26,6 +26,18 @@ class LineBox(BaseModel):
     box_2d: list[int]
 
 
+class LineBoxes(BaseModel):
+    """Envelope around ``list[LineBox]`` for providers whose structured-output
+    mode only accepts a JSON *object* at the top level.
+
+    Gemini takes ``list[LineBox]`` directly as a ``response_schema``; Claude's
+    ``output_format`` and OpenAI's ``text_format`` both want an object, so those
+    clients ask for ``{"lines": [...]}`` and unwrap it here. Same no-defaults
+    rule as ``LineBox`` (see module docs)."""
+
+    lines: list[LineBox]
+
+
 class PlacedLine(BaseModel):
     """A line text placed onto a normalized box, with provenance.
 
@@ -87,9 +99,11 @@ class PageResult(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    """Gemini token counts accumulated over one or more API calls.
+    """Token counts accumulated over one or more API calls, any provider.
 
-    Google bills two kinds of tokens, at different per-million rates:
+    Every supported provider bills two kinds of tokens, at different
+    per-million rates (field names below are Gemini's; Claude and OpenAI report
+    the same two quantities under ``input_tokens`` / ``output_tokens``):
 
     * **input** -- ``prompt_token_count``; dominated by the page *image*, whose
       token count grows with media resolution (the high/medium/low tiling).
@@ -112,6 +126,19 @@ class TokenUsage(BaseModel):
     def total(self) -> int:
         """Every billed token: input + visible output + thinking."""
         return self.input + self.output + self.thinking
+
+    def add(self, *, input: int = 0, output: int = 0, thinking: int = 0) -> None:
+        """Accumulate one billed call from already-extracted counts.
+
+        Providers name these fields differently (Gemini ``prompt_token_count``,
+        Claude/OpenAI ``input_tokens``), so each client pulls its own numbers out
+        and reports them here; ``add_response`` below stays the Gemini-shaped
+        convenience path. Always counts one call, even when a provider omits
+        usage entirely, so ``calls`` matches requests actually billed."""
+        self.calls += 1
+        self.input += max(0, int(input or 0))
+        self.output += max(0, int(output or 0))
+        self.thinking += max(0, int(thinking or 0))
 
     def add_response(self, usage_metadata) -> None:
         """Accumulate one response's ``usage_metadata`` (an SDK object or a

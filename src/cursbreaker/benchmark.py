@@ -337,7 +337,7 @@ def refresh(corpus: Path, *, model_tag: str = "default", force: bool = False,
         from .config import load_settings
         settings = load_settings()
     if provider is None:
-        from .gemini_client import make_provider
+        from .providers import make_provider
         provider = make_provider(settings)
 
     corpus = Path(corpus)

@@ -1,14 +1,20 @@
-"""Transcription providers.
+"""Google Gemini transcription provider.
 
-``GeminiProvider`` wraps the official ``google-genai`` SDK. ``MockProvider``
-returns deterministic sample output and exists only for the test suite, so the
-pipeline and hOCR export can be exercised without a real API key or network --
-it is not exposed to users.
+``GeminiProvider`` wraps the official ``google-genai`` SDK and defines the
+``TranscriptionProvider`` contract that every provider implements (Claude and
+OpenAI live in ``anthropic_client`` / ``openai_client``; ``providers`` picks
+between them). ``MockProvider`` returns deterministic sample output and exists
+only for the test suite, so the pipeline and hOCR export can be exercised
+without a real API key or network -- it is not exposed to users.
 
 The defaults follow the recipe from Mark Humphries' "Gemini 3 Solves
 Handwriting Recognition": temperature 0, high media resolution, and a
 deliberately *low* thinking budget (extra reasoning was found to hurt
 handwriting accuracy).
+
+The prompts are shared across providers (see ``prompts``), and so is error
+classification (see ``providers``): the private ``_is_*`` names here are thin
+aliases kept because they are this module's long-standing vocabulary.
 """
 
 from __future__ import annotations
@@ -16,11 +22,19 @@ from __future__ import annotations
 import json
 import sys
 import time
-from dataclasses import dataclass
 from typing import Protocol
 
 from .config import Settings
 from .models import LineBox, TokenUsage
+from .prompts import PROMPT_DETECT, PROMPT_ONE_PASS, PROMPT_TRANSCRIBE
+from .providers import (
+    KeyStatus,
+    is_auth_error as _is_auth_error,
+    is_model_unavailable as _is_model_unavailable,
+    is_transient as _is_transient,
+    short_error as _short_error,
+    strip_code_fence as _strip_code_fence,
+)
 
 # Shown as hints only when the live model list is unavailable; the UI prefers
 # the live list from the user's key. We keep these to currently-callable models:
@@ -38,43 +52,7 @@ SUGGESTED_MODELS = [
 # flash is included because it's reachable on more keys (incl. free tier).
 FALLBACK_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash"]
 
-_READING_ORDER_RULE = (
-    "Use natural reading order: if the page has multiple columns, finish each "
-    "column from top to bottom before moving on to the next column (left to "
-    "right). For a single column, just go top to bottom."
-)
 
-PROMPT_TRANSCRIBE = (
-    "You are an expert paleographer. Carefully transcribe the handwriting in "
-    "this document image. Transcribe every line of the main text, preserving "
-    "the original line breaks (one source line per output line). "
-    + _READING_ORDER_RULE
-    + " Expand nothing, correct nothing, and translate nothing - reproduce the "
-    "text exactly as written. Respond with ONLY the transcription text: no "
-    "commentary, labels, or code fences."
-)
-
-PROMPT_DETECT = (
-    "Detect every line of handwritten or printed text in this document image. "
-    "Return a JSON array where each element has two fields: 'text' (your "
-    "accurate transcription of that single line, exactly as written) and "
-    "'box_2d' (the line's bounding box as [ymin, xmin, ymax, xmax], integers "
-    "normalized to 0-1000 with the origin at the top-left). "
-    + _READING_ORDER_RULE
-    + " One element per source line. Do not merge separate lines. Never return "
-    "masks, explanations, or code fences."
-)
-
-PROMPT_ONE_PASS = (
-    "Carefully transcribe the handwriting in this document image, line by line. "
-    "Return a JSON array where each element has 'text' (the accurate "
-    "transcription of one source line, reproduced exactly as written) and "
-    "'box_2d' ([ymin, xmin, ymax, xmax] integers normalized to 0-1000, origin "
-    "top-left). "
-    + _READING_ORDER_RULE
-    + " One element per source line. Never return masks, explanations, or code "
-    "fences."
-)
 
 class TranscriptionProvider(Protocol):
     def transcribe_text(self, image_png: bytes, mime: str = "image/png") -> str: ...
@@ -98,89 +76,13 @@ class TranscriptionProvider(Protocol):
     ) -> int: ...
 
 
-def make_provider(settings: Settings) -> TranscriptionProvider:
-    return GeminiProvider(settings)
-
-
-@dataclass
-class KeyStatus:
-    """Result of a cheap, generation-free check that an API key still works."""
-
-    state: str          # valid | invalid | unknown | no_key
-    message: str = ""
-
-
-# Substrings that mark a genuine authentication failure (bad/revoked/expired
-# key) in a Gemini error, independent of SDK version.
-_AUTH_MARKERS = (
-    "API_KEY_INVALID", "API KEY NOT VALID", "API KEY EXPIRED",
-    "PERMISSION_DENIED", "UNAUTHENTICATED", "UNAUTHORIZED",
-    "INVALID AUTHENTICATION",
-)
-
-
-def _is_auth_error(exc: Exception) -> bool:
-    """True only when an exception clearly means a bad/revoked key.
-
-    Deliberately conservative: a transient network error, a 5xx, or a 429
-    rate-limit must NOT be classified as 'invalid', or we would tell a user
-    their good key is dead."""
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if code in (401, 403):
-        return True
-    blob = f"{getattr(exc, 'message', '')} {exc}".upper()
-    return any(m in blob for m in _AUTH_MARKERS)
-
-
-# Substrings marking a model that exists in ListModels but can't be called
-# (retired/renamed/not granted). Version-independent.
-_MODEL_GONE_MARKERS = (
-    "NOT_FOUND", "NO LONGER AVAILABLE", "IS NOT FOUND", "NOT SUPPORTED",
-    "DOES NOT EXIST", "UNKNOWN MODEL", "NOT FOUND FOR API VERSION",
-)
-
-
-def _is_model_unavailable(exc: Exception) -> bool:
-    """True when an error means the *model* is gone (vs. a key/network problem),
-    so we can fall back to another model instead of failing the whole job."""
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if code == 404:
-        return True
-    blob = f"{getattr(exc, 'message', '')} {exc}".upper()
-    return any(m in blob for m in _MODEL_GONE_MARKERS)
-
-
-# Transient failures worth retrying with backoff: the service was momentarily
-# unavailable/overloaded, hit a deadline, or a network blip occurred -- common
-# with very large/dense images. Never auth or model-gone (handled separately).
-_TRANSIENT_MARKERS = (
-    "UNAVAILABLE", "DEADLINE", "RESOURCE_EXHAUSTED", "INTERNAL", "OVERLOADED",
-    "TIMEOUT", "TIMED OUT", "TEMPORARILY", "CONNECTION", "RESET BY PEER",
-)
 # A dense map scan can legitimately take minutes, and a one-off 503/deadline
-# usually clears on a retry.
+# usually clears on a retry. Gemini keeps its own retry loop (rather than the
+# shared ``call_with_retries``) because retries here are interleaved with the
+# model-fallback walk in ``_generate``.
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 2.0          # seconds; doubles each attempt (2, 4, 8)
 _REQUEST_TIMEOUT_MS = 300_000    # 5-minute client timeout for slow, large images
-
-
-def _is_transient(exc: Exception) -> bool:
-    """True for retryable service/timeout errors (503 UNAVAILABLE, deadline
-    exceeded, 429, 5xx, network blips) -- but never for auth or model-gone."""
-    if _is_auth_error(exc) or _is_model_unavailable(exc):
-        return False
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if code in (408, 429, 500, 502, 503, 504):
-        return True
-    blob = f"{getattr(exc, 'message', '')} {type(exc).__name__} {exc}".upper()
-    return any(m in blob for m in _TRANSIENT_MARKERS)
-
-
-def _short_error(exc: Exception) -> str:
-    """A compact one-line version of an SDK error (drops the JSON blob)."""
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None) or ""
-    msg = str(getattr(exc, "message", "") or exc).split("{", 1)[0].strip()
-    return f"{code} {msg}".strip()[:140] or "error"
 
 
 def _transient_message(exc: Exception) -> str:
@@ -195,6 +97,13 @@ def _transient_message(exc: Exception) -> str:
     )
 
 
+def probe_key(key: str) -> None:
+    """The provider-registry entry point for key verification (see
+    ``providers.check_api_key``). Delegates so that stubbing ``_probe_models``
+    -- this module's long-standing seam -- still takes effect."""
+    _probe_models(key)
+
+
 def _probe_models(key: str) -> None:
     """One ListModels request to verify a key. Free -- it returns metadata only,
     spending no generation tokens or quota. Returns on success; raises on
@@ -207,14 +116,14 @@ def _probe_models(key: str) -> None:
     return       # an empty list still means auth succeeded
 
 
-def check_api_key(settings: Settings) -> KeyStatus:
+def check_api_key(settings: Settings) -> "KeyStatus":
     """Verify a stored key is still active *without* spending generation quota.
 
     Uses the free ListModels endpoint so a revoked/expired/mistyped key is
     caught here -- in Settings -- instead of mid-transcription. A genuine auth
     failure is reported as ``invalid``; anything ambiguous (offline, timeout,
     5xx, rate-limit) is ``unknown`` so a good key is never called dead."""
-    key = settings.resolved_api_key()
+    key = settings.resolved_api_key("gemini")
     if not key:
         return KeyStatus("no_key", "No API key is stored.")
     try:
@@ -238,7 +147,7 @@ class GeminiProvider:
     def __init__(self, settings: Settings):
         from google import genai  # imported lazily so the rest of the app loads without the SDK
 
-        api_key = settings.resolved_api_key()
+        api_key = settings.resolved_api_key("gemini")
         if not api_key:
             raise RuntimeError(
                 "No Gemini API key set. Add one in Settings or set the "
@@ -480,17 +389,6 @@ def _parse_lineboxes(resp) -> list[LineBox]:
     except json.JSONDecodeError:
         return []
     return [LineBox(**d) for d in data if isinstance(d, dict)]
-
-
-def _strip_code_fence(text: str) -> str:
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    return text
 
 
 class MockProvider:
