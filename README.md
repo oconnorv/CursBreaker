@@ -169,7 +169,10 @@ tells us the real input tokens.
 
 Published rates change, so every in-app figure is an estimate, not a guarantee.
 Rates live in `src/cursbreaker/pricing.py`; edit the numbers and bump
-`PRICES_AS_OF` to refresh them.
+`PRICES_AS_OF` to refresh them. Where a rate is introductory and its expiry is
+already published — Gemini 3.8 Flash doubles on 2027-01-01 — the catalog holds
+both prices and quotes whichever is in force that day, so estimates stay right
+across the change with nothing to remember.
 Current rates: [Gemini](https://ai.google.dev/gemini-api/docs/pricing) ·
 [Claude](https://claude.com/pricing#api) ·
 [OpenAI](https://openai.com/api/pricing/).

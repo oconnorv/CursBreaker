@@ -1,9 +1,14 @@
+from datetime import date
+
+import pytest
+
 from cursbreaker.models import TokenUsage
 from cursbreaker.pricing import (
     CATALOG,
     REPLACED_MODELS,
     catalog_for,
     cost_for,
+    current_rates,
     default_model_for,
     effective_rates,
     owns_model,
@@ -132,3 +137,63 @@ def test_retirements_stay_within_one_provider():
         # bug, since the key for the new provider may not even be set.
         assert provider_info("gemini").id == pricing_for(successor).provider
         assert retired.split("-")[0] == successor.split("-")[0]
+
+
+# --- scheduled price changes ---------------------------------------------- #
+# An introductory rate expires on a published date. The catalog declares both
+# prices so estimates switch by themselves; these pin that switch.
+INTRO = date(2026, 12, 31)      # last day of the introductory rate
+STANDARD = date(2027, 1, 1)     # first day of the standard rate
+
+
+def test_intro_rate_applies_up_to_and_including_its_last_day():
+    flash = pricing_for("gemini-3.8-flash")
+    assert current_rates(flash, today=date(2026, 9, 11)) == (0.75, 3.75)
+    assert current_rates(flash, today=INTRO) == (0.75, 3.75)
+
+
+def test_standard_rate_applies_from_the_day_it_takes_effect():
+    flash = pricing_for("gemini-3.8-flash")
+    assert current_rates(flash, today=STANDARD) == (1.50, 7.50)
+    assert current_rates(flash, today=date(2028, 6, 1)) == (1.50, 7.50)
+
+
+def test_a_run_after_the_change_is_costed_at_the_standard_rate():
+    # The whole point: without this the estimate would read half the real cost
+    # from January until someone noticed and edited the catalog.
+    flash = pricing_for("gemini-3.8-flash")
+    usage = TokenUsage(input=1_000_000, output=1_000_000, calls=1)
+    assert cost_for(flash, usage, today=INTRO) == pytest.approx(0.75 + 3.75)
+    assert cost_for(flash, usage, today=STANDARD) == pytest.approx(1.50 + 7.50)
+
+
+def test_effective_rates_carries_the_date_through():
+    flash = pricing_for("gemini-3.8-flash")
+    usage = TokenUsage(input=1000, output=1000, calls=1)
+    assert effective_rates(flash, usage, today=INTRO) == (0.75, 3.75)
+    assert effective_rates(flash, usage, today=STANDARD) == (1.50, 7.50)
+
+
+def test_models_without_a_scheduled_change_are_unaffected_by_the_date():
+    for model in ("gemini-3.1-pro-preview", "claude-opus-5", "gpt-6-astra"):
+        p = pricing_for(model)
+        assert current_rates(p, today=date(2030, 1, 1)) == (
+            p.input_per_mtok, p.output_per_mtok
+        ), model
+
+
+def test_no_entry_combines_tiering_with_a_scheduled_change():
+    # current_rates resolves the base rates only. A tiered model with a
+    # scheduled change would keep quoting its stale *_high rates after the
+    # change, so the combination is disallowed rather than half-supported.
+    for m in CATALOG:
+        assert not (m.tier_threshold and m.scheduled_from), m.model
+
+
+def test_a_scheduled_change_declares_real_rates():
+    for m in CATALOG:
+        if not m.scheduled_from:
+            continue
+        date.fromisoformat(m.scheduled_from)          # parses, or this fails
+        assert m.input_per_mtok_from > 0, m.model
+        assert m.output_per_mtok_from > 0, m.model

@@ -12,6 +12,11 @@ dropdown and the prices together.
 
 To refresh prices: edit the numbers below and bump ``PRICES_AS_OF``.
 
+An entry can also declare a price change that has already been *announced*
+(``scheduled_from`` and the ``*_from`` rates). ``current_rates`` picks whichever
+price is in force on the day, so an introductory rate stops being quoted the
+moment it expires instead of waiting for someone to notice.
+
 A model with no entry here still runs -- ``pricing_for`` returns ``None`` and the
 UI reports token counts without a dollar figure -- so a stale saved model
 degrades to "no published price" rather than to a wrong number.
@@ -20,6 +25,7 @@ degrades to "no published price" rather than to a wrong number.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 # Bump whenever the numbers below change; surfaced in the UI for transparency.
 PRICES_AS_OF = "2026-09-11"
@@ -42,6 +48,14 @@ class ModelPricing:
     prompt is. ``tier_threshold`` (in input tokens) marks the boundary; the
     ``*_high`` rates apply to a request whose prompt exceeds it. A threshold of
     0 means flat pricing and the ``*_high`` fields are unused.
+
+    A model can also carry an *already-announced* future price. Introductory
+    rates expire on a published date, and an app that kept quoting the intro
+    rate afterwards would halve every estimate until someone noticed and
+    edited this file. ``scheduled_from`` (ISO date) plus ``*_from`` rates let
+    the entry describe both prices at once; ``current_rates`` picks whichever
+    applies today, with no code change on the day it flips. Scheduled changes
+    apply to the base rates only -- see ``current_rates``.
     """
 
     model: str
@@ -52,6 +66,10 @@ class ModelPricing:
     input_per_mtok_high: float = 0.0
     output_per_mtok_high: float = 0.0
     provider: str = "gemini"
+    # An announced future price. Empty date = the rates above are the only ones.
+    scheduled_from: str = ""
+    input_per_mtok_from: float = 0.0
+    output_per_mtok_from: float = 0.0
 
 
 # The dropdown, in display order, grouped by provider. The first entry for a
@@ -66,13 +84,15 @@ CATALOG: list[ModelPricing] = [
         input_per_mtok_high=4.00, output_per_mtok_high=18.00,
         provider="gemini",
     ),
-    # Introductory rate, and it does not last: Google has it doubling to
-    # $1.50 / $7.50 on 2027-01-01. Revisit this entry (and PRICES_AS_OF) before
-    # then, or every Flash estimate from January reads half the real cost.
+    # $0.75/$3.75 is an introductory rate that expires: Google has it doubling
+    # on 2027-01-01. Both prices are declared here, so estimates switch to the
+    # standard rate on the day by themselves.
     ModelPricing(
         "gemini-3.8-flash", "Gemini 3.8 Flash",
         input_per_mtok=0.75, output_per_mtok=3.75,
         provider="gemini",
+        scheduled_from="2027-01-01",
+        input_per_mtok_from=1.50, output_per_mtok_from=7.50,
     ),
     # --- Anthropic Claude --------------------------------------------------
     # Prices verified against claude.com/pricing#api on PRICES_AS_OF. Claude
@@ -171,7 +191,36 @@ def owns_model(provider: str | None, model: str | None) -> bool:
     return entry is not None and entry.provider == provider_info(provider).id
 
 
-def effective_rates(pricing: ModelPricing, usage) -> tuple[float, float]:
+def current_rates(
+    pricing: ModelPricing, *, today: date | None = None
+) -> tuple[float, float]:
+    """The (input, output) base rates in effect on ``today``.
+
+    An entry with a ``scheduled_from`` date carries two prices: the one in
+    force now and the announced one that replaces it. Resolving by date here
+    means an introductory rate stops being quoted the day it expires, rather
+    than the day someone remembers to edit this file -- and until then the
+    cheaper rate is still what gets quoted, so nothing is overstated either.
+
+    The date is the machine's local one. Billing boundaries are the provider's,
+    so a run in the hours around midnight on a change-over can be priced on the
+    wrong side of it; every figure the app shows is labelled an estimate, and
+    being a few hours early or late on one day is a far smaller error than
+    quoting a withdrawn price for months.
+
+    Scheduled changes apply to the base rates only, never to the ``*_high``
+    tier -- no catalog entry uses both, and a test enforces that, because a
+    scheduled change on a tiered model would silently leave the tier stale."""
+    if pricing.scheduled_from:
+        starts = date.fromisoformat(pricing.scheduled_from)
+        if (today or date.today()) >= starts:
+            return pricing.input_per_mtok_from, pricing.output_per_mtok_from
+    return pricing.input_per_mtok, pricing.output_per_mtok
+
+
+def effective_rates(
+    pricing: ModelPricing, usage, *, today: date | None = None
+) -> tuple[float, float]:
     """The (input, output) per-million rates that apply to ``usage``.
 
     For a tiered model the higher rates kick in once a single request's prompt
@@ -186,11 +235,11 @@ def effective_rates(pricing: ModelPricing, usage) -> tuple[float, float]:
         and (usage.input / usage.calls) > pricing.tier_threshold
     ):
         return pricing.input_per_mtok_high, pricing.output_per_mtok_high
-    return pricing.input_per_mtok, pricing.output_per_mtok
+    return current_rates(pricing, today=today)
 
 
-def cost_for(pricing: ModelPricing, usage) -> float:
+def cost_for(pricing: ModelPricing, usage, *, today: date | None = None) -> float:
     """USD cost for ``usage`` under ``pricing`` (thinking billed at the output
-    rate, per ``TokenUsage.cost``)."""
-    in_rate, out_rate = effective_rates(pricing, usage)
+    rate, per ``TokenUsage.cost``), at the rates in force on ``today``."""
+    in_rate, out_rate = effective_rates(pricing, usage, today=today)
     return usage.cost(in_rate, out_rate)

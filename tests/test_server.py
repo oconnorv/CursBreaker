@@ -1084,6 +1084,49 @@ def test_models_endpoint_returns_priced_catalog():
     assert pro["tier_threshold"] == 200_000   # tiered pricing is exposed
 
 
+def test_dropdown_quotes_the_standard_rate_once_the_intro_period_ends(monkeypatch):
+    # End to end, not just the resolver: on 2027-01-01 the published-price hint
+    # in Settings must show the rate actually in force, with nobody editing
+    # anything. Before this, it would have quoted the withdrawn intro rate.
+    from datetime import date as _date
+
+    from cursbreaker import pricing
+
+    class _Frozen(_date):
+        @classmethod
+        def today(cls):
+            return cls(2027, 1, 1)
+
+    today = [m for m in client.get("/api/models?provider=gemini").json()["models"]
+             if m["id"] == "gemini-3.8-flash"][0]
+    assert (today["input_per_mtok"], today["output_per_mtok"]) == (0.75, 3.75)
+
+    monkeypatch.setattr(pricing, "date", _Frozen)
+    later = [m for m in client.get("/api/models?provider=gemini").json()["models"]
+             if m["id"] == "gemini-3.8-flash"][0]
+    assert (later["input_per_mtok"], later["output_per_mtok"]) == (1.50, 7.50)
+
+
+def test_reported_cost_uses_the_standard_rate_after_the_intro_period(monkeypatch):
+    from datetime import date as _date
+
+    from cursbreaker import pricing
+
+    class _Frozen(_date):
+        @classmethod
+        def today(cls):
+            return cls(2027, 1, 1)
+
+    usage = TokenUsage(input=1_000_000, output=1_000_000, calls=1)
+    before = server._usage_to_dict(usage, "gemini-3.8-flash")
+    assert before["cost"] == pytest.approx(0.75 + 3.75)
+
+    monkeypatch.setattr(pricing, "date", _Frozen)
+    after = server._usage_to_dict(usage, "gemini-3.8-flash")
+    assert after["cost"] == pytest.approx(1.50 + 7.50)
+    assert after["price_input_per_mtok"] == 1.50
+
+
 def test_model_choice_round_trips_through_settings_api():
     r = client.post(
         "/api/settings", json={"transcription_model": "gemini-3.8-flash"}

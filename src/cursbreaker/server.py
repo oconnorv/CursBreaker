@@ -42,6 +42,7 @@ from .pricing import (
     PRICING_URL,
     catalog_for,
     cost_for,
+    current_rates,
     effective_rates,
     pricing_for,
 )
@@ -216,21 +217,24 @@ def list_models(provider: str | None = None):
     models and their prices stay in lockstep."""
     settings = load_settings()
     info = provider_info(provider or settings.provider)
+    def _entry(m):
+        # Rates resolved for today: an entry may carry an announced future
+        # price, and the UI must quote the one actually in force.
+        in_rate, out_rate = current_rates(m)
+        return {
+            "id": m.model,
+            "label": m.label,
+            "provider": m.provider,
+            "input_per_mtok": in_rate,
+            "output_per_mtok": out_rate,
+            "tier_threshold": m.tier_threshold,
+            "input_per_mtok_high": m.input_per_mtok_high,
+            "output_per_mtok_high": m.output_per_mtok_high,
+        }
+
     return {
         "provider": info.id,
-        "models": [
-            {
-                "id": m.model,
-                "label": m.label,
-                "provider": m.provider,
-                "input_per_mtok": m.input_per_mtok,
-                "output_per_mtok": m.output_per_mtok,
-                "tier_threshold": m.tier_threshold,
-                "input_per_mtok_high": m.input_per_mtok_high,
-                "output_per_mtok_high": m.output_per_mtok_high,
-            }
-            for m in catalog_for(info.id)
-        ],
+        "models": [_entry(m) for m in catalog_for(info.id)],
         "prices_as_of": PRICES_AS_OF,
         "pricing_url": info.pricing_url,
     }
@@ -763,7 +767,7 @@ def _usage_to_dict(usage, model=None) -> dict:
             in_rate, out_rate = effective_rates(pricing, usage)
             d["cost"] = cost_for(pricing, usage)
         else:
-            in_rate, out_rate = pricing.input_per_mtok, pricing.output_per_mtok
+            in_rate, out_rate = current_rates(pricing)
             d["cost"] = 0.0
         d["model"] = pricing.model
         d["model_label"] = pricing.label
