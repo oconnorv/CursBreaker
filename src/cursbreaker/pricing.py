@@ -66,14 +66,12 @@ CATALOG: list[ModelPricing] = [
         input_per_mtok_high=4.00, output_per_mtok_high=18.00,
         provider="gemini",
     ),
+    # Introductory rate, and it does not last: Google has it doubling to
+    # $1.50 / $7.50 on 2027-01-01. Revisit this entry (and PRICES_AS_OF) before
+    # then, or every Flash estimate from January reads half the real cost.
     ModelPricing(
-        "gemini-3.5-flash", "Gemini 3.5 Flash",
-        input_per_mtok=1.50, output_per_mtok=9.00,
-        provider="gemini",
-    ),
-    ModelPricing(
-        "gemini-3.1-flash-lite", "Gemini 3.1 Flash-Lite",
-        input_per_mtok=0.25, output_per_mtok=1.50,
+        "gemini-3.8-flash", "Gemini 3.8 Flash",
+        input_per_mtok=0.75, output_per_mtok=3.75,
         provider="gemini",
     ),
     # --- Anthropic Claude --------------------------------------------------
@@ -121,6 +119,24 @@ CATALOG: list[ModelPricing] = [
 ]
 
 _BY_MODEL = {m.model: m for m in CATALOG}
+
+# Models dropped from the catalog, and what to use instead. Without this a
+# retired id falls back to its provider's *default* -- which is the flagship,
+# so a user who deliberately picked the cheap fast model would be moved onto
+# the expensive one at 8x the price without being asked. Map a retirement to
+# its nearest equivalent instead, and only fall back to the default when there
+# isn't one.
+REPLACED_MODELS: dict[str, str] = {
+    # The 3.x Flash line, superseded by 3.8 Flash (still the cheap, fast tier).
+    "gemini-3.5-flash": "gemini-3.8-flash",
+    "gemini-3.1-flash-lite": "gemini-3.8-flash",
+}
+
+
+def replacement_for(model: str | None) -> str:
+    """The catalogued successor to a retired model id, or ``""``."""
+    successor = REPLACED_MODELS.get(model or "")
+    return successor if pricing_for(successor) else ""
 
 
 def pricing_for(model: str | None) -> ModelPricing | None:

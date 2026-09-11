@@ -172,11 +172,19 @@ class Settings(BaseModel):
         Also keeps the model and the provider consistent: switching provider
         leaves the previous provider's model id behind, which would 404 on the
         first call, so a model that doesn't belong to the active provider is
-        replaced with that provider's default. Idempotent; returns ``self``."""
-        from .pricing import default_model_for, owns_model
+        replaced -- with its named successor if it is a retired model, else
+        with that provider's default. Idempotent; returns ``self``."""
+        from .pricing import default_model_for, owns_model, replacement_for
 
         if not owns_model(self.provider, self.transcription_model):
-            self.transcription_model = default_model_for(self.provider)
+            # A retired model moves to its named successor where there is one,
+            # so a deliberate choice of the cheap tier isn't silently upgraded
+            # to the flagship's price.
+            successor = replacement_for(self.transcription_model)
+            self.transcription_model = (
+                successor if owns_model(self.provider, successor)
+                else default_model_for(self.provider)
+            )
         self.detection_model = self.transcription_model
         return self
 

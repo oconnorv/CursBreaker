@@ -93,7 +93,7 @@ def test_public_dict_reports_every_key_without_leaking_any():
 
 
 def test_switching_provider_replaces_a_model_it_cannot_run():
-    s = Settings(provider="anthropic", transcription_model="gemini-3.5-flash")
+    s = Settings(provider="anthropic", transcription_model="gemini-3.8-flash")
     s.sync_models()
     assert s.transcription_model == "claude-opus-5"
     assert s.detection_model == "claude-opus-5"
@@ -109,6 +109,24 @@ def test_switching_to_openai_selects_its_default_model():
     s = Settings(provider="openai", transcription_model="claude-opus-5")
     s.sync_models()
     assert s.transcription_model == "gpt-6-astra"
+
+
+def test_a_retired_model_moves_to_its_successor_not_to_the_flagship():
+    # Someone who chose the cheap fast tier must not be silently moved onto the
+    # flagship at several times the price just because their model retired.
+    for retired in ("gemini-3.5-flash", "gemini-3.1-flash-lite"):
+        s = Settings(provider="gemini", transcription_model=retired)
+        s.sync_models()
+        assert s.transcription_model == "gemini-3.8-flash", retired
+        assert s.detection_model == "gemini-3.8-flash"
+
+
+def test_a_retired_model_still_yields_to_the_provider_actually_selected():
+    # The successor only applies within its own provider; switching to Claude
+    # still lands on a Claude model.
+    s = Settings(provider="anthropic", transcription_model="gemini-3.5-flash")
+    s.sync_models()
+    assert s.transcription_model == "claude-opus-5"
 
 
 def test_an_uncatalogued_model_is_replaced_rather_than_left_to_404():

@@ -209,7 +209,7 @@ Current rates: [Gemini](https://ai.google.dev/gemini-api/docs/pricing) ·
 
 - **Model:** each service starts on its flagship — `gemini-3.1-pro-preview`,
   `claude-opus-5`, `gpt-6-astra` — picked from a short curated dropdown
-  (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite; Claude Opus 5 · Sonnet 5 ·
+  (Gemini 3.1 Pro · 3.8 Flash; Claude Opus 5 · Sonnet 5 ·
   Haiku 4.5; GPT-6 Astra · GPT-5.6 Sol · Terra · Luna), with each model's
   published price shown and used to estimate cost automatically. The flagship
   is the default because it reads difficult hands best; for bulk work on

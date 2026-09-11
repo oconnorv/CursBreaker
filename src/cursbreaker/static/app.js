@@ -1086,7 +1086,7 @@ function priceBasis(t) {
     + `$${Number(t.price_output_per_mtok || 0).toFixed(2)}/1M output`;
 }
 
-// "Gemini 3.5 Flash's published price of $… (prices as of …)" — the model and
+// "Gemini 3.8 Flash's published price of $… (prices as of …)" — the model and
 // date a dollar figure was computed from, for full transparency.
 function priceSource(t) {
   const model = t.model_label ? `${escapeHtml(t.model_label)}'s ` : "";

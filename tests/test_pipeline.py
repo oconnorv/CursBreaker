@@ -332,20 +332,20 @@ def test_estimate_prices_automatically_from_selected_model(png_path):
     settings = Settings(
         content_type="handwriting",
         mode="one_pass",
-        transcription_model="gemini-3.5-flash",  # $1.50 in / $9.00 out
+        transcription_model="gemini-3.8-flash",  # $0.75 in / $3.75 out
     )
     d = estimate_usage([png_path], _BillingProvider(), settings)
     # input = 500 tokens; one-pass output range = 1800..5400 tokens/page.
-    expected_low = 500 / 1_000_000 * 1.50 + 1800 / 1_000_000 * 9.00
-    expected_high = 500 / 1_000_000 * 1.50 + 5400 / 1_000_000 * 9.00
+    expected_low = 500 / 1_000_000 * 0.75 + 1800 / 1_000_000 * 3.75
+    expected_high = 500 / 1_000_000 * 0.75 + 5400 / 1_000_000 * 3.75
     assert d["cost_low"] == pytest.approx(expected_low)
     assert d["cost_high"] == pytest.approx(expected_high)
     assert d["cost_high"] > d["cost_low"]
     assert d["output_low"] == 1800 and d["output_high"] == 5400
     # The model + the rates it used are echoed back for the UI to display.
-    assert d["model"] == "gemini-3.5-flash"
-    assert d["price_input_per_mtok"] == 1.50
-    assert d["price_output_per_mtok"] == 9.00
+    assert d["model"] == "gemini-3.8-flash"
+    assert d["price_input_per_mtok"] == 0.75
+    assert d["price_output_per_mtok"] == 3.75
     assert d["prices_as_of"]
 
 

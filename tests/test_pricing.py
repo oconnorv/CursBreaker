@@ -1,21 +1,23 @@
 from cursbreaker.models import TokenUsage
 from cursbreaker.pricing import (
     CATALOG,
+    REPLACED_MODELS,
     catalog_for,
     cost_for,
     default_model_for,
     effective_rates,
     owns_model,
     pricing_for,
+    replacement_for,
 )
 
 
-def test_gemini_catalog_lists_the_three_curated_models_pro_first():
-    # Pro is first in the dropdown (and the saved default); lighter models follow.
+def test_gemini_catalog_is_pro_first_then_flash():
+    # Pro is first in the dropdown (and the saved default); the lighter model
+    # follows.
     assert [m.model for m in catalog_for("gemini")] == [
         "gemini-3.1-pro-preview",
-        "gemini-3.5-flash",
-        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
     ]
 
 
@@ -59,8 +61,8 @@ def test_default_model_is_the_first_entry_for_every_provider():
 
 
 def test_owns_model_keeps_providers_from_inheriting_each_others_models():
-    assert owns_model("gemini", "gemini-3.5-flash")
-    assert not owns_model("anthropic", "gemini-3.5-flash")
+    assert owns_model("gemini", "gemini-3.8-flash")
+    assert not owns_model("anthropic", "gemini-3.8-flash")
     assert owns_model("anthropic", "claude-opus-5")
     assert not owns_model("gemini", "claude-opus-5")
     assert owns_model("openai", "gpt-5.6-terra")
@@ -77,10 +79,10 @@ def test_pricing_for_unknown_model_is_none():
 
 
 def test_flat_model_cost():
-    p = pricing_for("gemini-3.5-flash")  # $1.50 in / $9.00 out
+    p = pricing_for("gemini-3.8-flash")  # $0.75 in / $3.75 out
     usage = TokenUsage(input=1_000_000, output=500_000, thinking=500_000, calls=2)
-    # input: 1M * $1.50 ; output+thinking: 1M * $9.00
-    assert cost_for(p, usage) == 1.50 + 9.00
+    # input: 1M * $0.75 ; output+thinking: 1M * $3.75
+    assert cost_for(p, usage) == 0.75 + 3.75
 
 
 def test_tiered_model_uses_low_tier_for_small_prompts():
@@ -110,3 +112,23 @@ def test_effective_rates_with_zero_calls_falls_back_to_base():
     # No calls yet -> can't be in the high tier; base rates apply.
     p = pricing_for("gemini-3.1-pro-preview")
     assert effective_rates(p, TokenUsage()) == (2.00, 12.00)
+
+
+def test_every_retirement_points_at_a_model_that_exists():
+    # A successor that isn't in the catalog would send the user to the
+    # flagship's price instead of the cheap tier they picked -- exactly what
+    # the mapping exists to prevent.
+    for retired, successor in REPLACED_MODELS.items():
+        assert pricing_for(retired) is None, f"{retired} is still catalogued"
+        assert pricing_for(successor) is not None, successor
+        assert replacement_for(retired) == successor
+
+
+def test_retirements_stay_within_one_provider():
+    from cursbreaker.providers import provider_info
+
+    for retired, successor in REPLACED_MODELS.items():
+        # Both sides are Gemini ids today; a cross-provider mapping would be a
+        # bug, since the key for the new provider may not even be set.
+        assert provider_info("gemini").id == pricing_for(successor).provider
+        assert retired.split("-")[0] == successor.split("-")[0]

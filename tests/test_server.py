@@ -994,7 +994,7 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
         json={
             "content_type": "handwriting",
             "mode": "one_pass",
-            "transcription_model": "gemini-3.1-flash-lite",  # $0.25 in / $1.50 out
+            "transcription_model": "gemini-3.8-flash",  # $0.75 in / $3.75 out
             "api_key": "AIza_estimate_test_key_WXYZ",
         },
     )
@@ -1009,12 +1009,12 @@ def test_estimate_billable_with_fake_provider(monkeypatch, png_path):
     assert r["input"] == 1000          # 1 page * 1 call * 1000 input tokens
     # Cost is a range derived from the model's published price; one-pass output
     # range is 1800..5400 tokens/page.
-    expected_low = 1000 / 1_000_000 * 0.25 + 1800 / 1_000_000 * 1.50
-    expected_high = 1000 / 1_000_000 * 0.25 + 5400 / 1_000_000 * 1.50
+    expected_low = 1000 / 1_000_000 * 0.75 + 1800 / 1_000_000 * 3.75
+    expected_high = 1000 / 1_000_000 * 0.75 + 5400 / 1_000_000 * 3.75
     assert r["cost_low"] == pytest.approx(expected_low)
     assert r["cost_high"] == pytest.approx(expected_high)
-    assert r["model"] == "gemini-3.1-flash-lite"
-    assert r["price_input_per_mtok"] == 0.25
+    assert r["model"] == "gemini-3.8-flash"
+    assert r["price_input_per_mtok"] == 0.75
 
 
 def test_estimate_no_staged_files_is_400():
@@ -1027,20 +1027,19 @@ def test_models_endpoint_returns_priced_catalog():
     ids = [m["id"] for m in body["models"]]
     # Pro is first (the dropdown's default position + the saved default model).
     assert ids[0] == "gemini-3.1-pro-preview"
-    assert "gemini-3.5-flash" in ids
-    assert "gemini-3.1-flash-lite" in ids
+    assert "gemini-3.8-flash" in ids
     assert body["prices_as_of"]            # shown in the UI for transparency
-    flash = next(m for m in body["models"] if m["id"] == "gemini-3.5-flash")
-    assert flash["input_per_mtok"] == 1.50 and flash["output_per_mtok"] == 9.00
+    flash = next(m for m in body["models"] if m["id"] == "gemini-3.8-flash")
+    assert flash["input_per_mtok"] == 0.75 and flash["output_per_mtok"] == 3.75
     pro = next(m for m in body["models"] if m["id"] == "gemini-3.1-pro-preview")
     assert pro["tier_threshold"] == 200_000   # tiered pricing is exposed
 
 
 def test_model_choice_round_trips_through_settings_api():
     r = client.post(
-        "/api/settings", json={"transcription_model": "gemini-3.5-flash"}
+        "/api/settings", json={"transcription_model": "gemini-3.8-flash"}
     ).json()
-    assert r["transcription_model"] == "gemini-3.5-flash"
+    assert r["transcription_model"] == "gemini-3.8-flash"
 
 
 def test_detection_model_follows_transcription_model():
@@ -1048,10 +1047,10 @@ def test_detection_model_follows_transcription_model():
     # model keeps detection (two-pass) on the same model, so the priced/reported
     # model can't drift from the one detection actually uses.
     r = client.post(
-        "/api/settings", json={"transcription_model": "gemini-3.1-flash-lite"}
+        "/api/settings", json={"transcription_model": "gemini-3.8-flash"}
     ).json()
-    assert r["transcription_model"] == "gemini-3.1-flash-lite"
-    assert r["detection_model"] == "gemini-3.1-flash-lite"
+    assert r["transcription_model"] == "gemini-3.8-flash"
+    assert r["detection_model"] == "gemini-3.8-flash"
 
 
 def test_index_has_cost_controls():
