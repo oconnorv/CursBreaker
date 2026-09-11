@@ -334,9 +334,9 @@ def test_providers_endpoint_describes_every_supported_service():
     assert "ANTHROPIC_API_KEY" in by_id["anthropic"]["env_vars"]
     assert "OPENAI_API_KEY" in by_id["openai"]["env_vars"]
     assert "GEMINI_API_KEY" in by_id["gemini"]["env_vars"]
-    # OpenAI's two caveats must reach the UI rather than surprising a user.
+    # OpenAI's estimate caveat must reach the UI rather than surprising a user.
     assert by_id["openai"]["counts_input_tokens"] is False
-    assert by_id["openai"]["lists_models_live"] is True
+    assert by_id["openai"]["notes"]
     assert by_id["gemini"]["counts_input_tokens"] is True
 
 
@@ -380,8 +380,6 @@ def test_models_endpoint_is_scoped_to_one_provider():
     gem = client.get("/api/models?provider=gemini").json()
     assert gem["provider"] == "gemini"
     assert all(m["id"].startswith("gemini-") for m in gem["models"])
-    assert all(m["priced"] for m in gem["models"])
-    assert gem["live"] is False
 
     ant = client.get("/api/models?provider=anthropic").json()
     assert [m["id"] for m in ant["models"]] == [
@@ -390,14 +388,19 @@ def test_models_endpoint_is_scoped_to_one_provider():
     assert "claude.com" in ant["pricing_url"]
 
 
-def test_openai_models_are_listed_live_and_marked_unpriced():
-    # With no key stored the live list is simply empty -- the UI shows a
-    # "save a key" placeholder rather than an invented model id.
-    client.delete("/api/settings/api_key?provider=openai")
+def test_openai_models_are_curated_and_priced():
     data = client.get("/api/models?provider=openai").json()
     assert data["provider"] == "openai"
-    assert data["live"] is True
-    assert all(m["priced"] is False for m in data["models"])
+    assert [m["id"] for m in data["models"]] == [
+        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+    ]
+    # Every listed model must carry a real rate: a 0.00 would quietly render
+    # as a free run rather than as "no published price".
+    assert all(
+        m["input_per_mtok"] > 0 and m["output_per_mtok"] > 0
+        for m in data["models"]
+    )
+    assert "openai.com" in data["pricing_url"]
 
 
 def test_transcribing_without_the_active_providers_key_names_that_provider(png_path):

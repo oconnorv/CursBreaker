@@ -5,8 +5,7 @@ box-producing calls, line boxes) back. Three services can do that job, and an
 institution will often have approved exactly one of them, so the provider is a
 user setting rather than a build-time choice:
 
-* ``gemini``    -- Google Gemini (the original; the only one that can price an
-                   estimate *and* count input tokens before a run)
+* ``gemini``    -- Google Gemini (the original)
 * ``anthropic`` -- Anthropic Claude
 * ``openai``    -- OpenAI
 
@@ -39,10 +38,12 @@ class ProviderInfo:
 
     ``key_field`` is the ``Settings`` attribute holding that provider's key;
     ``env_vars`` are the environment variables that override it, in precedence
-    order. ``counts_input_tokens`` records whether the service exposes a
-    free token-counting endpoint -- Gemini and Claude do, so their pre-flight
+    order. ``counts_input_tokens`` records whether the service exposes a free
+    token-counting endpoint -- Gemini and Claude do, so their pre-flight
     estimate measures the real image cost; OpenAI does not, so its estimate
-    reports output tokens only and says so.
+    covers the output side only and is presented as a floor, never as the
+    expected total. (After a run every provider reports real input tokens, so
+    the *actual* cost shown afterwards is complete for all three.)
     """
 
     id: str
@@ -53,9 +54,6 @@ class ProviderInfo:
     console_url: str      # where a user creates a key
     pricing_url: str
     counts_input_tokens: bool = True
-    # Providers whose selectable models come from the user's own key rather
-    # than our curated price list (see pricing.CATALOG).
-    lists_models_live: bool = False
     notes: str = ""
 
 
@@ -87,10 +85,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
         console_url="https://platform.openai.com/api-keys",
         pricing_url="https://openai.com/api/pricing/",
         counts_input_tokens=False,
-        lists_models_live=True,
         notes=(
-            "Models are read from your own key, and OpenAI has no free "
-            "token-counting endpoint, so cost is not estimated before a run."
+            "OpenAI has no free token-counting endpoint, so the estimate "
+            "before a run covers output only and reads as a minimum; the "
+            "actual cost after a run is complete."
         ),
     ),
 }

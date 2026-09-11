@@ -105,12 +105,16 @@ def test_switching_provider_keeps_a_model_it_can_run():
     assert s.transcription_model == "claude-haiku-4-5"
 
 
-def test_a_live_listing_provider_keeps_whatever_model_the_user_picked():
-    # OpenAI models aren't in the price list, so they must not be treated as
-    # "belongs to another provider" and silently replaced.
-    s = Settings(provider="openai", transcription_model="some-openai-model")
+def test_switching_to_openai_selects_its_default_model():
+    s = Settings(provider="openai", transcription_model="claude-opus-5")
     s.sync_models()
-    assert s.transcription_model == "some-openai-model"
+    assert s.transcription_model == "gpt-6-astra"
+
+
+def test_an_uncatalogued_model_is_replaced_rather_than_left_to_404():
+    s = Settings(provider="openai", transcription_model="gpt-retired-yesterday")
+    s.sync_models()
+    assert s.transcription_model == "gpt-6-astra"
 
 
 # --------------------------------------------------------------------------- #

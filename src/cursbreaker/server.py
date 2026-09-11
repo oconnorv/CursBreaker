@@ -199,7 +199,6 @@ def list_providers():
                 "pricing_url": info.pricing_url,
                 "env_vars": list(info.env_vars),
                 "counts_input_tokens": info.counts_input_tokens,
-                "lists_models_live": info.lists_models_live,
                 "notes": info.notes,
             }
             for info in PROVIDERS.values()
@@ -210,55 +209,28 @@ def list_providers():
 
 @app.get("/api/models")
 def list_models(provider: str | None = None):
-    """Selectable models for one provider (default: the active one).
+    """The curated model catalog for one provider (default: the active one),
+    with published prices, for the dropdown + automatic cost estimate.
 
-    Priced providers return their curated catalog -- a fixed list, not the
-    key's live models, so the selectable models and their prices stay in
-    lockstep. A provider with no price list (see ``pricing``) instead returns
-    what the user's own key can see, priced as unknown; the UI already renders
-    "no published price" without a dollar figure."""
+    A fixed list per provider (not the key's live models) so the selectable
+    models and their prices stay in lockstep."""
     settings = load_settings()
     info = provider_info(provider or settings.provider)
-    models = [
-        {
-            "id": m.model,
-            "label": m.label,
-            "provider": m.provider,
-            "input_per_mtok": m.input_per_mtok,
-            "output_per_mtok": m.output_per_mtok,
-            "tier_threshold": m.tier_threshold,
-            "input_per_mtok_high": m.input_per_mtok_high,
-            "output_per_mtok_high": m.output_per_mtok_high,
-            "priced": True,
-        }
-        for m in catalog_for(info.id)
-    ]
-    live_error = ""
-    if info.lists_models_live:
-        try:
-            settings.provider = info.id
-            live = make_provider(settings).list_models()
-        except Exception as exc:  # noqa: BLE001 -- a missing key is normal here
-            live, live_error = [], str(exc)
-        models = [
-            {
-                "id": mid,
-                "label": mid,
-                "provider": info.id,
-                "input_per_mtok": 0.0,
-                "output_per_mtok": 0.0,
-                "tier_threshold": 0,
-                "input_per_mtok_high": 0.0,
-                "output_per_mtok_high": 0.0,
-                "priced": False,
-            }
-            for mid in live
-        ]
     return {
         "provider": info.id,
-        "models": models,
-        "live": info.lists_models_live,
-        "live_error": live_error,
+        "models": [
+            {
+                "id": m.model,
+                "label": m.label,
+                "provider": m.provider,
+                "input_per_mtok": m.input_per_mtok,
+                "output_per_mtok": m.output_per_mtok,
+                "tier_threshold": m.tier_threshold,
+                "input_per_mtok_high": m.input_per_mtok_high,
+                "output_per_mtok_high": m.output_per_mtok_high,
+            }
+            for m in catalog_for(info.id)
+        ],
         "prices_as_of": PRICES_AS_OF,
         "pricing_url": info.pricing_url,
     }

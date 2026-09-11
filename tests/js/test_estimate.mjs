@@ -67,6 +67,33 @@ check("shows the cost range (dollars)", h.includes("$1.96") && h.includes("$5.42
 check("shows the per-page output range", h.includes("3,000") && h.includes("9,000"), h);
 check("links to live pricing", h.includes("ai.google.dev/gemini-api/docs/pricing"), h);
 
+// A provider that can't price page images before a run (OpenAI) yields an
+// output-only figure. Shown as a plain range it would understate the bill,
+// because the image side is usually the larger half -- so it must read as a
+// floor and say what's missing.
+const partial = renderEstimate({
+  billable: true, files: 1, pages: 2, calls: 2, input: 0, input_measured: false,
+  provider_label: "OpenAI", output_low: 1000, output_high: 2000,
+  total_low: 1000, total_high: 2000, per_page_low: 500, per_page_high: 1000,
+  cost_low: 0.05, cost_high: 0.1, model_label: "GPT-6 Astra",
+  price_input_per_mtok: 10, price_output_per_mtok: 50,
+});
+check("output-only estimate reads as a floor, not a total",
+  /at least/i.test(partial) && !/estimated range/i.test(partial), partial);
+check("output-only estimate says the images cost more",
+  /page images/i.test(partial), partial);
+check("output-only estimate names what can't be counted",
+  /can't count image tokens/i.test(partial), partial);
+
+// The normal path still reads as a range, not a floor.
+const full = renderEstimate({
+  billable: true, files: 1, pages: 2, calls: 2, input: 5000, input_measured: true,
+  output_low: 1000, output_high: 2000, total_low: 6000, total_high: 7000,
+  per_page_low: 500, per_page_high: 1000, cost_low: 0.05, cost_high: 0.1,
+  model_label: "Gemini 3.1 Pro", price_input_per_mtok: 2, price_output_per_mtok: 12,
+});
+check("fully-measured estimate is not labelled a floor", !/at least/i.test(full), full);
+
 const nb = renderEstimate({ billable: false, files: 3, reason: "Printed-only mode" });
 check("not-billable explains no token cost", /no tokens/i.test(nb) && /Printed-only/.test(nb), nb);
 check("not-billable makes no 'exact' claim", !/are exact/i.test(nb), nb);

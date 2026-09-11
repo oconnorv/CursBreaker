@@ -158,21 +158,18 @@ CursBreaker helps you stay in control: it shows an **estimated cost before
 every run** and the **actual token usage afterward**, and the model dropdown
 lists each model's published price.
 
-Two honest caveats about that estimate:
-
-* **OpenAI runs report tokens, not dollars.** CursBreaker prices a run from a
-  curated list of published per-million-token rates, and it ships that list for
-  Gemini and Claude only. OpenAI models are read live from your own key and
-  carry no price, so the estimate and the post-run summary show token counts
-  with no dollar figure. (Adding rates to `src/cursbreaker/pricing.py` is all
-  it takes to change that.)
-* **OpenAI can't price the page images in advance.** Gemini and Claude both
-  expose a free token-counting endpoint, so the estimate measures the real
-  input cost of your pages before anything runs. OpenAI has no equivalent, so
-  its estimate covers the output side only and says so — the input half,
-  usually the larger one, is missing rather than zero.
+One caveat worth knowing: **OpenAI can't price the page images in advance.**
+Gemini and Claude both expose a free token-counting endpoint, so their
+pre-flight estimate measures the real input cost of your pages before anything
+runs. OpenAI has no equivalent, so its estimate covers the output side only and
+is shown as a minimum ("at least …"), with the shortfall spelled out — the
+image half, usually the larger one, is missing rather than zero. The **actual**
+cost reported after a run is complete for every provider, because the response
+tells us the real input tokens.
 
 Published rates change, so every in-app figure is an estimate, not a guarantee.
+Rates live in `src/cursbreaker/pricing.py`; edit the numbers and bump
+`PRICES_AS_OF` to refresh them.
 Current rates: [Gemini](https://ai.google.dev/gemini-api/docs/pricing) ·
 [Claude](https://claude.com/pricing#api) ·
 [OpenAI](https://openai.com/api/pricing/).
@@ -210,13 +207,14 @@ Current rates: [Gemini](https://ai.google.dev/gemini-api/docs/pricing) ·
 
 ### Accuracy settings (defaults)
 
-- **Model:** each service starts on its most accurate option —
-  `gemini-3.1-pro-preview` for Gemini, `claude-opus-5` for Claude — picked from
-  a short curated dropdown (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite;
-  Claude Opus 5 · Sonnet 5 · Haiku 4.5), with each model's published price
-  shown and used to estimate cost automatically. OpenAI has no curated list:
-  its dropdown is filled from your own key and carries no prices (see *Does it
-  cost money?* above).
+- **Model:** each service starts on its flagship — `gemini-3.1-pro-preview`,
+  `claude-opus-5`, `gpt-6-astra` — picked from a short curated dropdown
+  (Gemini 3.1 Pro · 3.5 Flash · 3.1 Flash-Lite; Claude Opus 5 · Sonnet 5 ·
+  Haiku 4.5; GPT-6 Astra · GPT-5.6 Sol · Terra · Luna), with each model's
+  published price shown and used to estimate cost automatically. The flagship
+  is the default because it reads difficult hands best; for bulk work on
+  legible material the lighter models cost a fraction as much, and the
+  dropdown shows exactly how much.
 - **Temperature:** `0.3`
 - **Thinking budget:** `128` tokens — Humphries' finding is that extra
   reasoning *hurts* handwriting accuracy, so the default is deliberately
@@ -248,7 +246,8 @@ search-result highlighting), and **ALTO XML** for ALTO/METS-based repositories.
 - **Localization is line-level.** Word boxes are synthesized from line boxes, so
   they're approximate within a line but reliable for search/highlight.
 - **Model names change.** If a default model is unavailable to your key, pick a
-  current one from the dropdown.
+  current one from the dropdown. (On OpenAI, a rejected model id comes back
+  with the list of models your key can actually see.)
 - **Known failure modes** (from the underlying model): marginalia and text
   squeezed between lines transcribe poorly; very dense or multi-column pages may
   drop or merge lines.

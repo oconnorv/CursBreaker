@@ -12,15 +12,9 @@ dropdown and the prices together.
 
 To refresh prices: edit the numbers below and bump ``PRICES_AS_OF``.
 
-**OpenAI carries no entries here.** Its models are read live from the user's own
-key instead (``providers.PROVIDERS['openai'].lists_models_live``), because this
-file's promise is that a listed price is a *published* price someone checked --
-and no verified OpenAI price list was available when this was written. The
-consequence is visible and already handled everywhere: with no catalog entry
-``pricing_for`` returns ``None``, the UI says there's no published price for the
-model, and token counts are reported without a dollar figure. Adding verified
-``ModelPricing(..., provider="openai")`` rows below is all it takes to switch
-OpenAI onto the same automatic estimate as the others.
+A model with no entry here still runs -- ``pricing_for`` returns ``None`` and the
+UI reports token counts without a dollar figure -- so a stale saved model
+degrades to "no published price" rather than to a wrong number.
 """
 
 from __future__ import annotations
@@ -101,7 +95,29 @@ CATALOG: list[ModelPricing] = [
         provider="anthropic",
     ),
     # --- OpenAI ------------------------------------------------------------
-    # Intentionally empty; see the module docstring.
+    # Rates recorded on PRICES_AS_OF; OpenAI's own pricing page is the live
+    # source (PRICING_URLS below), and like every other figure here they are
+    # point-in-time. Flat-rate across the context window, as above.
+    ModelPricing(
+        "gpt-6-astra", "GPT-6 Astra",
+        input_per_mtok=10.00, output_per_mtok=50.00,
+        provider="openai",
+    ),
+    ModelPricing(
+        "gpt-5.6-sol", "GPT-5.6 Sol",
+        input_per_mtok=4.00, output_per_mtok=20.00,
+        provider="openai",
+    ),
+    ModelPricing(
+        "gpt-5.6-terra", "GPT-5.6 Terra",
+        input_per_mtok=2.00, output_per_mtok=12.00,
+        provider="openai",
+    ),
+    ModelPricing(
+        "gpt-5.6-luna", "GPT-5.6 Luna",
+        input_per_mtok=0.20, output_per_mtok=1.20,
+        provider="openai",
+    ),
 ]
 
 _BY_MODEL = {m.model: m for m in CATALOG}
@@ -120,9 +136,8 @@ def catalog_for(provider: str | None) -> list[ModelPricing]:
 
 
 def default_model_for(provider: str | None) -> str:
-    """The model a provider starts on: the first catalog entry, or ``""`` for a
-    provider whose models are listed live (the user picks from their own key,
-    and guessing an id here would 404 on the first call)."""
+    """The model a provider starts on: its first catalog entry (the most
+    capable; lighter, cheaper options follow it in the dropdown)."""
     entries = catalog_for(provider)
     return entries[0].model if entries else ""
 
@@ -130,17 +145,14 @@ def default_model_for(provider: str | None) -> str:
 def owns_model(provider: str | None, model: str | None) -> bool:
     """Whether ``model`` can be used under ``provider``.
 
-    A catalogued model belongs to exactly the provider that lists it. A model
-    we don't price is accepted only by a live-listing provider -- that's how
-    OpenAI ids (and nothing else) pass -- so switching provider can never leave
-    another provider's model id selected."""
+    A catalogued model belongs to exactly the provider that lists it, and an
+    uncatalogued id belongs to nobody -- so switching provider can never leave
+    another provider's model id selected, and ``sync_models`` replaces it with
+    a model that will actually answer."""
     from .providers import provider_info
 
     entry = pricing_for(model)
-    info = provider_info(provider)
-    if entry is not None:
-        return entry.provider == info.id
-    return bool(model) and info.lists_models_live
+    return entry is not None and entry.provider == provider_info(provider).id
 
 
 def effective_rates(pricing: ModelPricing, usage) -> tuple[float, float]:

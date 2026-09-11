@@ -31,11 +31,19 @@ def test_anthropic_catalog_is_priced_and_opus_first():
     assert all(m.input_per_mtok > 0 and m.output_per_mtok > 0 for m in entries)
 
 
-def test_openai_has_no_curated_prices_so_models_are_listed_live():
-    # Deliberate: no verified OpenAI price list, so nothing is invented here.
-    # The UI path for an unpriced model (tokens, no dollar figure) covers it.
-    assert catalog_for("openai") == []
-    assert default_model_for("openai") == ""
+def test_openai_catalog_is_priced_and_flagship_first():
+    entries = catalog_for("openai")
+    assert [m.model for m in entries] == [
+        "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"
+    ]
+    assert all(m.input_per_mtok > 0 and m.output_per_mtok > 0 for m in entries)
+
+
+def test_catalogued_models_are_unique_across_providers():
+    # pricing_for() is a flat lookup by id, so a duplicate id would silently
+    # price one provider's model at another's rate.
+    ids = [m.model for m in CATALOG]
+    assert len(ids) == len(set(ids))
 
 
 def test_every_catalog_entry_belongs_to_a_known_provider():
@@ -44,9 +52,10 @@ def test_every_catalog_entry_belongs_to_a_known_provider():
     assert {m.provider for m in CATALOG} <= set(PROVIDERS)
 
 
-def test_default_model_is_the_first_entry_for_priced_providers():
+def test_default_model_is_the_first_entry_for_every_provider():
     assert default_model_for("gemini") == "gemini-3.1-pro-preview"
     assert default_model_for("anthropic") == "claude-opus-5"
+    assert default_model_for("openai") == "gpt-6-astra"
 
 
 def test_owns_model_keeps_providers_from_inheriting_each_others_models():
@@ -54,9 +63,11 @@ def test_owns_model_keeps_providers_from_inheriting_each_others_models():
     assert not owns_model("anthropic", "gemini-3.5-flash")
     assert owns_model("anthropic", "claude-opus-5")
     assert not owns_model("gemini", "claude-opus-5")
-    # A model we don't price is acceptable only where models are listed live.
-    assert owns_model("openai", "some-new-openai-model")
-    assert not owns_model("gemini", "some-new-openai-model")
+    assert owns_model("openai", "gpt-5.6-terra")
+    assert not owns_model("gemini", "gpt-5.6-terra")
+    # An id nobody catalogues belongs to nobody, so sync_models replaces it
+    # with one that will actually answer.
+    assert not owns_model("openai", "some-unknown-model")
     assert not owns_model("openai", "")
 
 

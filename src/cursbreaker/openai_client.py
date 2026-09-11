@@ -3,18 +3,16 @@
 Implements the same ``TranscriptionProvider`` contract as ``GeminiProvider``
 (see ``gemini_client``), so nothing downstream knows which service ran.
 
-Two OpenAI specifics shape this file, and both are visible to the user rather
-than hidden:
+One OpenAI specific shapes this file, and it is visible to the user rather
+than hidden: **input tokens can't be counted for free.** OpenAI exposes no
+count-tokens endpoint, so ``count_input_tokens`` returns 0 and the pre-flight
+estimate covers the output side only, presented as a minimum rather than an
+expected total. The *actual* cost reported after a run is complete, because
+the response's usage does carry real input tokens.
 
-* **Models come from the user's own key.** There is no curated price list for
-  OpenAI in ``pricing.CATALOG`` (see that module's docstring for why), so the
-  dropdown is filled from ``models.list()`` and there is no saved default --
-  the user picks. An unset model raises a clear error instead of guessing an id
-  that would 404 on the first page of a long batch.
-* **Input tokens can't be counted for free.** OpenAI exposes no
-  count-tokens endpoint, so ``count_input_tokens`` returns 0 and the pre-flight
-  estimate says the image side couldn't be measured, rather than implying a
-  page is free.
+When a model id is rejected, the error names what the key can actually see --
+a catalogued id can go stale, and "model not found" alone leaves a user
+guessing.
 
 Requests use the Responses API (``responses.parse`` / ``responses.create``),
 which is where structured output and image input live in the current SDK.
@@ -36,8 +34,10 @@ from .providers import (
     METADATA_TIMEOUT_S,
     REQUEST_TIMEOUT_S,
     call_with_retries,
+    is_model_unavailable,
     is_transient,
     lines_from_json_text,
+    short_error,
     transient_message,
 )
 
@@ -102,9 +102,9 @@ class OpenAIProvider:
         return self._lines(PROMPT_ONE_PASS, image_png, mime)
 
     def list_models(self) -> list[str]:
-        """Selectable models from the user's own key. The app can't price these
-        (no catalog entry), so the list is about reachability, not cost: if the
-        key can see it, the user can pick it."""
+        """Text-capable models this key can reach. The dropdown is the curated
+        priced catalog, so this is used for diagnostics: naming the real
+        alternatives when a configured model id turns out to be wrong."""
         try:
             client = self.client.with_options(timeout=METADATA_TIMEOUT_S)
             names = [
@@ -121,7 +121,8 @@ class OpenAIProvider:
     ) -> int:
         """Always 0: OpenAI has no free token-counting endpoint, and guessing
         an image's token count from its dimensions would put an invented number
-        in front of a cost estimate. The estimate reports this honestly (see
+        underneath a dollar figure. The estimate reports this honestly -- as a
+        minimum, not a total (see
         ``providers.PROVIDERS['openai'].counts_input_tokens``)."""
         return 0
 
@@ -161,9 +162,27 @@ class OpenAIProvider:
         except Exception as exc:
             if is_transient(exc):
                 raise RuntimeError(transient_message(exc, "OpenAI")) from exc
+            if is_model_unavailable(exc):
+                raise RuntimeError(self._model_gone_message(exc)) from exc
             raise
         self._tally(resp)
         return resp
+
+    def _model_gone_message(self, exc: Exception) -> str:
+        """A rejected model id is recoverable, but only if the user can see
+        what to switch to -- model names change, and a key may simply not be
+        granted the one we default to."""
+        msg = (
+            f"OpenAI rejected the model '{self._model()}' "
+            f"({short_error(exc)}). It may have been renamed or retired, or "
+            "your key may not have access to it. Pick another in Settings."
+        )
+        available = self.list_models()
+        if available:
+            shown = ", ".join(available[:12])
+            more = "…" if len(available) > 12 else ""
+            msg += f" Models your key can see: {shown}{more}"
+        return msg
 
     def _lines(self, prompt: str, image_png: bytes, mime: str) -> list[LineBox]:
         """A box-producing call. Uses the ``LineBoxes`` schema so the reply is

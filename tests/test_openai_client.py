@@ -87,10 +87,44 @@ def test_transcribe_text_sends_a_data_url_image_and_returns_the_text():
 
 
 def test_no_selected_model_asks_the_user_rather_than_guessing_an_id():
-    # Guessing would 404 on the first page of a long batch; there is no
-    # verified default model id for OpenAI in this app.
+    # Settings normally supplies a default, but a blank must not become a
+    # request with an empty model that 404s mid-batch.
     prov = _provider(_Resp(text="x"), model="")
     with pytest.raises(RuntimeError, match="Pick one in Settings"):
+        prov.transcribe_text(b"d")
+
+
+def test_a_rejected_model_id_names_the_alternatives_the_key_can_see():
+    # Model names change. "model_not_found" alone leaves the user guessing,
+    # so the error lists what their own key actually offers.
+    prov = _provider(_Resp(text="x"), models=("gpt-6-astra", "gpt-5.6-luna"))
+
+    class _Gone(Exception):
+        code = 404
+        message = "model_not_found"
+
+    def boom(**kwargs):
+        raise _Gone("404 model_not_found")
+
+    prov.client.responses.create = boom
+    with pytest.raises(RuntimeError) as err:
+        prov.transcribe_text(b"d")
+    assert "gpt-6-astra" in str(err.value)
+    assert "gpt-5.6-luna" in str(err.value)
+
+
+def test_a_rejected_model_still_errors_clearly_when_the_list_is_unavailable():
+    prov = _provider(_Resp(text="x"))
+
+    class _Gone(Exception):
+        code = 404
+        message = "model_not_found"
+
+    def boom(**kwargs):
+        raise _Gone("404 model_not_found")
+
+    prov.client.responses.create = boom
+    with pytest.raises(RuntimeError, match="Pick another in Settings"):
         prov.transcribe_text(b"d")
 
 
@@ -108,7 +142,7 @@ def test_boxes_fall_back_to_parsing_raw_json():
     assert prov.detect_lines(b"d") == [LineBox(text="hi", box_2d=[1, 2, 3, 4])]
 
 
-def test_model_list_comes_from_the_users_own_key_and_drops_non_text_models():
+def test_model_list_reads_the_users_own_key_and_drops_non_text_models():
     prov = _provider(
         _Resp(text="x"),
         models=("a-vision-model", "text-embedding-3", "whisper-1", "b-model"),

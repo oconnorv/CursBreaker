@@ -127,11 +127,9 @@ async function loadSettings() {
   // Model dropdown (options populated by loadModelCatalog before this runs).
   const sel = $("model");
   if (s.transcription_model) sel.value = s.transcription_model;
-  if (!sel.value && sel.options.length && sel.options[0].value) {
+  if (!sel.value && sel.options.length) {
     // A saved model that isn't in this provider's catalog -> fall back to the
     // first (and persist it so the UI and the backend agree on what will run).
-    // Skipped for the empty "save a key to load models" placeholder, which is
-    // not a model and must never be saved as one.
     sel.value = sel.options[0].value;
     saveSettings(gatherSettings());
   }
@@ -213,14 +211,6 @@ async function loadModelCatalog(provider) {
     pricingUrl = data.pricing_url || "";
     const sel = $("model");
     sel.innerHTML = "";
-    // A live-listing provider with no key yet has nothing to list; say so in
-    // the picker rather than leaving it mysteriously blank.
-    if (data.live && !modelCatalog.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "Save an API key to load models";
-      sel.appendChild(opt);
-    }
     for (const m of modelCatalog) {
       const opt = document.createElement("option");
       opt.value = m.id;
@@ -346,13 +336,6 @@ function updateModelPricingHint() {
   if (!hint) return;
   const m = modelInfo($("model").value);
   if (!m) { hint.textContent = ""; return; }
-  if (m.priced === false) {
-    const info = providerInfo(activeProvider);
-    hint.innerHTML =
-      `<b>${escapeHtml(m.label)}</b>: no published price on file, so runs report token counts without a dollar estimate.`
-      + (info ? ` <a href="${escapeHtml(info.pricing_url)}" target="_blank" rel="noopener noreferrer">Current pricing</a>.` : "");
-    return;
-  }
   let rates = `$${m.input_per_mtok.toFixed(2)}/1M input, $${m.output_per_mtok.toFixed(2)}/1M output`;
   if (m.tier_threshold) {
     rates += ` for prompts &le;${formatTokens(m.tier_threshold)} tokens `
@@ -1171,11 +1154,20 @@ function renderEstimate(d) {
       + `<span>No tokens for these ${d.files} file(s): ${escapeHtml(d.reason)} makes no API call, so there's no token cost.</span></div>`;
   }
   const hasCost = d.cost_low !== null && d.cost_low !== undefined;
+  // A provider that can't price page images up front yields an output-only
+  // figure. That is a FLOOR, not the expected total, and it must not be shown
+  // as one: the image side is usually the larger half of the bill.
+  const partial = d.input_measured === false;
   // Headline: an estimated cost RANGE (output scales with how much text is on
   // the page) -- or a token range when the model has no published price.
   const headline = hasCost
-    ? `<div class="estimate-cost"><span class="estimate-cost-num">~${formatCost(d.cost_low)}–${formatCost(d.cost_high)}</span>`
-      + `<span class="estimate-cost-label">estimated range &mdash; not a guarantee</span></div>`
+    ? `<div class="estimate-cost"><span class="estimate-cost-num">`
+      + `${partial ? "at least " : "~"}${formatCost(d.cost_low)}–${formatCost(d.cost_high)}</span>`
+      + `<span class="estimate-cost-label">`
+      + (partial
+          ? "output only &mdash; the page images cost more on top"
+          : "estimated range &mdash; not a guarantee")
+      + `</span></div>`
     : `<div class="estimate-cost"><span class="estimate-cost-num">${formatTokens(d.total_low)}–${formatTokens(d.total_high)}</span>`
       + `<span class="estimate-cost-label">tokens &mdash; no published price for this model</span></div>`;
   // Supporting detail as bullets rather than a paragraph.
@@ -1184,13 +1176,13 @@ function renderEstimate(d) {
     `<b>${d.files}</b> file(s), <b>${formatTokens(d.pages)}</b> page(s)`
     + (d.model_label ? ` with <b>${escapeHtml(d.model_label)}</b>` : "")
   );
-  if (d.input_measured === false) {
+  if (partial) {
     // Never imply the page images are free: this provider just can't be asked
     // what they cost without running the job.
     points.push(
       `~<b>${formatTokens(d.output_low)}–${formatTokens(d.output_high)}</b> output tokens`
       + ` <span class="muted">(assuming ~${formatTokens(d.per_page_low)}–${formatTokens(d.per_page_high)} output tokens/page across ${formatTokens(d.pages)} page(s)).`
-      + ` ${escapeHtml(d.provider_label || "This service")} can't count image tokens before a run, so the input side &mdash; usually the larger half &mdash; isn't included.</span>`
+      + ` ${escapeHtml(d.provider_label || "This service")} can't count image tokens before a run, so the input side &mdash; usually the larger half &mdash; is missing from the figure above. The actual cost shown after the run is complete.</span>`
     );
   } else {
     points.push(
@@ -1351,12 +1343,6 @@ function wire() {
     $("action-note").textContent = stagedStatus();
     if (hadKey) {
       announce(`${info ? info.short_label : "API"} key saved.`);
-      // A live-listing provider can only populate its dropdown once a key
-      // exists, so the just-saved key is what makes models appear.
-      if (info && info.lists_models_live) {
-        await loadModelCatalog(activeProvider);
-        await loadSettings();
-      }
       verifyKey(true); // confirm the just-pasted key works, and announce it
     }
   };
